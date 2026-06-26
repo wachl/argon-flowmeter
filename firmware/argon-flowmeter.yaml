@@ -1,0 +1,224 @@
+# =============================================================================
+#  Argon-Durchflussmesser  –  gemeinsames ESPHome-Package
+#  Olimex ESP32-POE2 (WROVER-E N4R8)  +  Festo SFAH (Volumenpuls-Ausgang)
+#  iwb / TUM
+#
+#  Diese Datei wird NICHT direkt geflasht. Sie wird von den Geräte-Dateien
+#  unter  devices/argon-flow-XX.yaml  via  packages:  eingebunden.
+#  Jede Geräte-Datei setzt nur ihre eigenen substitutions (Name, SP-Wert ...).
+#
+#  Verifizierte Hardware-Fakten (Stand Olimex-Handbuch Rev. 2.7 / Festo SFAH 2025-02d):
+#   - Ethernet-Takt liegt auf GPIO0 (WROVER!), Modus CLK_OUT  -> offizielles
+#     Olimex-Beispiel SOFTWARE/ESPHOME/esp32-poe2.yaml + Arduino ETH_CLOCK_GPIO0_OUT
+#   - PHY-Power auf GPIO12, MDC=GPIO23, MDIO=GPIO18, LAN8720, phy_addr 0
+#   - Pulssignal auf GPIO4 (= UEXT Pin 3 / EXT1 Pin 19), kein Onboard-Pullup
+# =============================================================================
+
+# ---- Vorgabewerte; werden je Gerät in devices/argon-flow-XX.yaml überschrieben
+substitutions:
+  device_name: "argon-flow-xx"
+  friendly_name: "Argon Flow XX"
+  # machine_id geht in die MQTT-Topics ein:  iwb/argon/<machine_id>/...
+  machine_id: "anlage-xx"
+  # Pulswertigkeit = der am Festo-SFAH eingestellte Schwellwert "SP"
+  # (Normvolumen je Puls, Einheit Nl). MUSS exakt dem Sensor-SP entsprechen!
+  liter_per_pulse: "1.0"
+  # Pin des Volumenpulses
+  pulse_pin: "GPIO4"
+  # Entprellung: kleiner als die Festo-Pulsbreite PULS (Standard 100 ms),
+  # groesser als Schaltflanken/Störungen.
+  pulse_filter: "30ms"
+  # Wird laenger als diese Zeit kein Puls gesehen, gilt der Durchfluss als 0.
+  # Bei sehr kleinem SP / sehr kleinem Durchfluss ggf. erhoehen.
+  flow_timeout: "5min"
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+  comment: "Argon-Durchflussmesser ${machine_id} (Olimex ESP32-POE2 + Festo SFAH)"
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+# WROVER-E N4R8 hat 8 MB PSRAM (wie offizielles Olimex-Beispiel)
+psram:
+  mode: quad
+  speed: 80MHz
+
+# ----------------------------------------------------------------------------
+#  Netzwerk: nur Ethernet (PoE). WiFi und Ethernet sind in ESPHome nicht
+#  gleichzeitig nutzbar -> fuer PoE bewusst kein wifi:-Block.
+#  Takt-Pin GPIO0 / CLK_OUT ist die WROVER-Besonderheit des POE2.
+# ----------------------------------------------------------------------------
+ethernet:
+  type: LAN8720
+  mdc_pin: GPIO23
+  mdio_pin: GPIO18
+  clk:
+    pin: GPIO0
+    mode: CLK_OUT
+  phy_addr: 0
+  power_pin: GPIO12
+
+logger:
+  level: INFO
+
+# ----------------------------------------------------------------------------
+#  Verwaltung / Fernzugriff
+#  - api: fuer ESPHome-Dashboard (Live-Logs, Status) und optional Home Assistant
+#         WICHTIG: reboot_timeout 0s, sonst rebootet das Geraet alle 15 min,
+#         wenn KEIN Home-Assistant-Client verbunden ist (reiner MQTT-Betrieb).
+#  - ota: Firmware-Updates ueber Ethernet (kein USB-Stecken mehr noetig)
+#  - web_server: kleine Status-Webseite je Geraet (Port 80)
+# ----------------------------------------------------------------------------
+api:
+  encryption:
+    key: !secret api_encryption_key
+  reboot_timeout: 0s
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+web_server:
+  port: 80
+  version: 3
+
+time:
+  - platform: sntp
+    id: sntp_time
+
+# ----------------------------------------------------------------------------
+#  MQTT (fuer das kundenspezifische Dashboard / herstellerunabhaengige Anbindung)
+#  Topic-Praefix je Anlage. Status als retained LWT (online/offline).
+#  ESPHome veroeffentlicht jede Entität unter:
+#     iwb/argon/<machine_id>/sensor/<object_id>/state
+#  Kommandos (Reset) ueber:  iwb/argon/<machine_id>/cmd
+# ----------------------------------------------------------------------------
+mqtt:
+  broker: !secret mqtt_broker
+  username: !secret mqtt_user
+  password: !secret mqtt_password
+  topic_prefix: "iwb/argon/${machine_id}"
+  birth_message:
+    topic: "iwb/argon/${machine_id}/status"
+    payload: "online"
+    retain: true
+  will_message:
+    topic: "iwb/argon/${machine_id}/status"
+    payload: "offline"
+    retain: true
+  on_message:
+    # Reset des persistenten Gesamtzaehlers per:  ...<machine_id>/cmd  ->  "reset"
+    - topic: "iwb/argon/${machine_id}/cmd"
+      payload: "reset"
+      then:
+        - lambda: |-
+            id(vol_total) = 0.0;
+            id(last_raw) = 0.0;
+        - logger.log: "Gesamtvolumen via MQTT-Kommando zurueckgesetzt"
+
+# ----------------------------------------------------------------------------
+#  Zaehlerlogik
+#  vol_total  : lebenslanges Gesamtvolumen, ueberlebt Reboot/Stromausfall
+#               (restore_value -> Flash/NVS, von ESPHome periodisch gesichert)
+#  last_raw   : Spiegel des fluechtigen pulse_meter-Totals (NICHT persistent);
+#               wird bei jedem Boot wie das pulse_meter-Total auf 0 gesetzt.
+# ----------------------------------------------------------------------------
+globals:
+  - id: vol_total
+    type: float
+    restore_value: true
+    initial_value: "0.0"
+  - id: last_raw
+    type: float
+    restore_value: false
+    initial_value: "0.0"
+
+sensor:
+  # ---- Momentaner Durchfluss --------------------------------------------------
+  # pulse_meter misst die Zeit zwischen Pulsen und meldet standardmaessig
+  # "Pulse/min". x liter_per_pulse  ->  Nl/min.
+  - platform: pulse_meter
+    pin:
+      number: ${pulse_pin}
+      mode:
+        input: true
+        pullup: true        # zusaetzlich externer Pull-up empfohlen (NPN braucht >=2 mA Last)
+    name: "Argon Durchfluss"
+    id: argon_flow
+    state_topic: "iwb/argon/${machine_id}/flow"
+    unit_of_measurement: "Nl/min"
+    device_class: volume_flow_rate
+    state_class: measurement
+    icon: "mdi:gauge"
+    accuracy_decimals: 2
+    internal_filter: ${pulse_filter}
+    timeout: ${flow_timeout}
+    filters:
+      - multiply: ${liter_per_pulse}
+    # Das fluechtige Sitzungs-Total (Pulse seit Boot) nutzen wir nur intern,
+    # um daraus das persistente Gesamtvolumen zu bilden.
+    total:
+      name: "Argon Volumen (Sitzung)"
+      id: argon_session_vol
+      unit_of_measurement: "Nl"
+      accuracy_decimals: 1
+      icon: "mdi:counter"
+      internal: true
+      filters:
+        - multiply: ${liter_per_pulse}
+      on_value:
+        - lambda: |-
+            // x ist bereits das mit liter_per_pulse skalierte Sitzungsvolumen.
+            float delta = x - id(last_raw);
+            if (delta < 0) delta = x;   // Schutz, falls pulse_meter intern resettet
+            id(last_raw) = x;
+            id(vol_total) += delta;
+        - component.update: argon_total_vol
+
+  # ---- Persistentes Gesamtvolumen --------------------------------------------
+  - platform: template
+    name: "Argon Gesamtvolumen"
+    id: argon_total_vol
+    state_topic: "iwb/argon/${machine_id}/total"
+    unit_of_measurement: "Nl"
+    state_class: total_increasing
+    accuracy_decimals: 1
+    icon: "mdi:sigma"
+    lambda: "return id(vol_total);"
+    update_interval: 5s
+
+  # ---- Diagnose: Betriebsspannung am EXT-Anschluss (GPI39, Teiler 47k/100k) ---
+  - platform: adc
+    pin: GPIO39
+    name: "Versorgungsspannung (Sense)"
+    state_topic: "iwb/argon/${machine_id}/voltage"
+    attenuation: 12db
+    update_interval: 60s
+    entity_category: diagnostic
+    filters:
+      # R2=47k / R8=100k -> Vin = Vadc * (47+100)/100 = Vadc * 1.47
+      - multiply: 1.47
+
+  - platform: uptime
+    name: "Uptime"
+    state_topic: "iwb/argon/${machine_id}/uptime"
+    entity_category: diagnostic
+
+# Online/Offline-Verfügbarkeit kommt aus dem retained LWT-Topic .../status
+# (birth_message / will_message oben) – kein zusätzlicher status-binary_sensor nötig.
+
+button:
+  # Reset auch ueber API/ESPHome-Dashboard/Home Assistant moeglich
+  - platform: template
+    name: "Gesamtvolumen zuruecksetzen"
+    icon: "mdi:restart"
+    entity_category: config
+    on_press:
+      - lambda: |-
+          id(vol_total) = 0.0;
+          id(last_raw) = 0.0;
+      - logger.log: "Gesamtvolumen via Button zurueckgesetzt"
