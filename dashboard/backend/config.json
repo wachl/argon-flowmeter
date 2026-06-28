@@ -2,12 +2,18 @@
   "host": "0.0.0.0",
   "port": 8000,
   "db_file": "argon.db",
-  "price_per_m3": 120,
+  "price_per_m3": 120.0,
   "stale_seconds": 120,
-  "leak": { "min": 0.2, "active": 1.0 },
+  "leak": {
+    "min": 0.2,
+    "active": 1.0
+  },
   "mqtt": {
-    "broker": "127.0.0.1",
+    "embedded": true,
+    "bind": "0.0.0.0",
     "port": 1883,
+    "allow_anonymous": true,
+    "broker": "127.0.0.1",
     "username": "argon",
     "password": "CHANGE_ME"
   }

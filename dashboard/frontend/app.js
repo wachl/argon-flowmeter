@@ -224,6 +224,7 @@
           <div style="display:flex;flex-direction:column;gap:5px;align-items:flex-end">
             <div style="display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--dim);font-weight:600"><span style="width:8px;height:8px;border-radius:50%;background:${mqttOk?'var(--good)':'var(--danger)'};animation:argpulse 1.8s ease-in-out infinite"></span>${mqttOk?'MQTT ONLINE':'NO DATA'} · ${onlineN}/${flat.length}</div>
             <div style="font-family:var(--fontnum);font-size:13px;color:var(--text)">${esc(clock)}</div></div>
+          <button data-action="open-settings" title="Settings" aria-label="Settings" style="border:1px solid var(--border);background:var(--panel);color:var(--dim);border-radius:9px;width:38px;height:38px;cursor:pointer;font-size:17px;line-height:1;align-self:flex-end">⚙</button>
         </div>
       </header>
 
@@ -305,9 +306,98 @@
     else if(act==='sort'){ const k=el.getAttribute('data-key'); if(S.sortKey===k) S.sortDir=S.sortDir==='asc'?'desc':'asc'; else {S.sortKey=k;S.sortDir='desc';} }
     else if(act==='scope-dept'){ const id=el.getAttribute('data-id'); S.scope=(S.scope.type==='dept'&&S.scope.id===id)?{type:'total'}:{type:'dept',id}; }
     else if(act==='scope-machine'){ const id=el.getAttribute('data-id'); S.scope=(S.scope.type==='machine'&&S.scope.id===id)?{type:'total'}:{type:'machine',id}; }
+    else if(act==='open-settings'){ openSettings(); return; }
     else return;
     render();
   });
+
+  // --------------------------------------------------------------- settings
+  let CFG = null;
+  function applyThemeTo(el){ const v=THEMES[S.theme]||THEMES.control; for(const k in v) el.style.setProperty(k,v[k]); }
+  const closeSettings = () => { const o=document.getElementById('settings-overlay'); if(o) o.remove(); };
+
+  async function openSettings(){
+    try{ const r=await fetch('api/config',{cache:'no-store'}); CFG = r.ok ? await r.json() : null; }
+    catch(e){ CFG=null; }
+    renderSettings();
+  }
+
+  function renderSettings(){
+    closeSettings();
+    const c=CFG||{}, m=c.mqtt||{}, st=c.status||{}, leak=c.leak||{};
+    const fld=(label,inner,hint)=>`<label style="display:flex;flex-direction:column;gap:5px"><span style="font-size:12px;font-weight:600;color:var(--dim)">${esc(label)}</span>${inner}${hint?`<span style="font-size:11px;color:var(--mute)">${esc(hint)}</span>`:''}</label>`;
+    const ist="background:var(--panel2);border:1px solid var(--border);border-radius:7px;color:var(--text);padding:8px 10px;font-family:var(--fontnum);font-size:13px;width:100%";
+    const inp=(id,val,type,extra)=>`<input id="${id}" type="${type||'text'}" value="${esc(val==null?'':val)}" ${extra||''} style="${ist}">`;
+    const chk=(id,on,lbl)=>`<div style="display:flex;align-items:center;gap:8px;height:36px"><input id="${id}" type="checkbox" ${on?'checked':''} style="width:16px;height:16px;accent-color:var(--accent)"><span style="font-size:12px;color:var(--dim)">${esc(lbl)}</span></div>`;
+
+    const ov=document.createElement('div'); ov.id='settings-overlay';
+    ov.setAttribute('style','position:fixed;inset:0;z-index:9999;background:rgba(2,6,12,0.62);display:flex;align-items:flex-start;justify-content:center;padding:6vh 16px;overflow:auto;backdrop-filter:blur(2px)');
+    ov.innerHTML=`
+      <div style="width:540px;max-width:100%;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);box-shadow:0 24px 70px rgba(0,0,0,.55);font-family:var(--fontsans);color:var(--text)">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:15px 18px;border-bottom:1px solid var(--border)">
+          <div style="font-size:15px;font-weight:600">Settings</div>
+          <button data-action="close-settings" style="border:none;background:var(--panel2);color:var(--dim);border-radius:7px;width:30px;height:30px;cursor:pointer;font-size:15px">✕</button></div>
+        <div style="padding:18px;display:flex;flex-direction:column;gap:18px">
+          <div>
+            <div style="font-size:11px;letter-spacing:.1em;color:var(--mute);font-weight:700;text-transform:uppercase;margin-bottom:8px">MQTT Broker</div>
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;font-size:12px;color:var(--dim)">
+              <span style="width:9px;height:9px;border-radius:50%;background:${st.embedded_running?'var(--good)':'var(--mute)'}"></span>broker ${st.embedded_running?'running':'stopped'}
+              <span style="width:9px;height:9px;border-radius:50%;background:${st.ingest_connected?'var(--good)':'var(--mute)'};margin-left:10px"></span>ingest ${st.ingest_connected?'connected':'waiting'}</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+              ${fld('Embedded broker', chk('cf-embedded',m.embedded,'run broker in dashboard'))}
+              ${fld('Allow anonymous', chk('cf-anon',m.allow_anonymous,'accept any client'))}
+              ${fld('Bind address', inp('cf-bind',m.bind||'0.0.0.0'),'devices use this PC’s LAN IP')}
+              ${fld('Port', inp('cf-port',m.port==null?1883:m.port,'number'))}
+              ${fld('External broker host', inp('cf-extbroker',m.broker||''),'only used if embedded is off')}
+              ${fld('Username', inp('cf-user',m.username||''))}
+              <div style="grid-column:1 / -1">${fld('Password', inp('cf-pass','','password','placeholder="'+(m.has_password?'•••••• (unchanged)':'(none)')+'"'),'leave blank to keep current')}</div>
+            </div>
+          </div>
+          <div>
+            <div style="font-size:11px;letter-spacing:.1em;color:var(--mute);font-weight:700;text-transform:uppercase;margin-bottom:8px">Pricing &amp; Alerts</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+              ${fld('Argon price (€/m³)', inp('cf-price',c.price_per_m3,'number','step="any"'))}
+              ${fld('Stale timeout (s)', inp('cf-stale',c.stale_seconds,'number'),'mark offline after')}
+              ${fld('Leak min (Nl/min)', inp('cf-leakmin',leak.min,'number','step="any"'))}
+              ${fld('Leak active (Nl/min)', inp('cf-leakact',leak.active,'number','step="any"'))}
+            </div>
+          </div>
+          <div id="settings-msg" style="font-size:12px;color:var(--mute);min-height:16px"></div>
+          <div style="display:flex;justify-content:flex-end;gap:10px">
+            <button data-action="close-settings" style="border:1px solid var(--border);background:var(--panel2);color:var(--dim);border-radius:8px;padding:9px 16px;cursor:pointer;font-weight:600;font-size:13px">Cancel</button>
+            <button data-action="save-settings" style="border:none;background:var(--accent);color:var(--onacc);border-radius:8px;padding:9px 18px;cursor:pointer;font-weight:700;font-size:13px">Save</button></div>
+        </div>
+      </div>`;
+    document.body.appendChild(ov);
+    applyThemeTo(ov);
+    ov.addEventListener('click', ev=>{
+      const el=ev.target.closest('[data-action]');
+      if(el){ const a=el.getAttribute('data-action'); if(a==='close-settings') return closeSettings(); if(a==='save-settings') return saveSettings(); }
+      if(ev.target===ov) closeSettings();
+    });
+  }
+
+  async function saveSettings(){
+    const v=id=>{ const e=document.getElementById(id); return e?e.value:undefined; };
+    const ck=id=>{ const e=document.getElementById(id); return e?e.checked:false; };
+    const num=x=>{ const n=parseFloat(x); return isNaN(n)?undefined:n; };
+    const body={
+      price_per_m3:num(v('cf-price')), stale_seconds:num(v('cf-stale')),
+      leak:{min:num(v('cf-leakmin')), active:num(v('cf-leakact'))},
+      mqtt:{ embedded:ck('cf-embedded'), allow_anonymous:ck('cf-anon'), bind:v('cf-bind'),
+             port:num(v('cf-port')), broker:v('cf-extbroker'), username:v('cf-user') }
+    };
+    const pw=v('cf-pass'); if(pw) body.mqtt.password=pw;
+    const msg=document.getElementById('settings-msg'); if(msg){ msg.style.color='var(--mute)'; msg.textContent='Saving …'; }
+    try{
+      const r=await fetch('api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      const j=await r.json().catch(()=>({}));
+      if(r.ok && j.ok){
+        if(msg){ msg.style.color='var(--good)'; msg.textContent=j.restart_required?'Saved. Restart the dashboard for broker changes to take effect.':'Saved.'; }
+        poll(); setTimeout(closeSettings, j.restart_required?2800:900);
+      }else if(msg){ msg.style.color='var(--danger)'; msg.textContent='Save failed: '+(j.error||('HTTP '+r.status)); }
+    }catch(e){ if(msg){ msg.style.color='var(--danger)'; msg.textContent='Save failed: '+e; } }
+  }
 
   // ------------------------------------------------------------------ data
   async function poll(){
