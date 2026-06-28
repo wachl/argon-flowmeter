@@ -1,5 +1,4 @@
 /* Argon Monitoring – Frontend (vanilla, kein Build-Schritt).
-   Visuell portiert aus dem Claude-Design "Argon Dashboard.dc.html",
    Daten live aus dem Backend (GET /api/data). */
 (() => {
   "use strict";

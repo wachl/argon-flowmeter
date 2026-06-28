@@ -3,8 +3,7 @@
 Kleines Backend (FastAPI + paho-mqtt + SQLite) + statisches Frontend. Liest die
 MQTT-Telemetrie der 16 ESPHome-Durchflussmesser, akkumuliert den Verbrauch in
 stündliche Buckets und zeigt KPIs, Verbrauchs-Trend, Alarme, Abteilungs- und
-Maschinenübersicht. Optik portiert aus dem Claude-Design `Argon Dashboard.dc.html`
-(Original liegt unter `../design_src/`).
+Maschinenübersicht.
 
 ```
 dashboard/

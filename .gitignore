@@ -9,12 +9,6 @@ dashboard/backend/argon.db-shm
 __pycache__/
 *.pyc
 
-# Original-Design-Export (Referenz, kann groß sein)
-claudeDesignProject.zip
-
 # Tool-/Editor-spezifisch
 .claude/
-
-# Claude-Design-Laufzeit (nicht benötigt im Repo)
-design_src/support.js
-design_src/.thumbnail
+.serena/

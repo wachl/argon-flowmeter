@@ -1,4 +1,4 @@
-# Argon-Durchflussmesser — Aufbauanleitung (v2, korrigiert)
+# Argon-Durchflussmesser — Aufbauanleitung
 
 **Olimex ESP32-POE2 + Festo SFAH | iwb / TUM**
 
@@ -6,13 +6,6 @@ Erfassung des Argon-Verbrauchs über den **Volumenpuls-Ausgang** des Festo SFAH.
 und Datenanbindung aus einer einzigen Quelle (PoE). Der ESP32 (ESPHome) zählt die Pulse,
 berechnet Durchfluss und Gesamtvolumen und veröffentlicht sie via Ethernet/MQTT. Updates
 laufen nach dem ersten Flashen **per OTA über Ethernet**.
-
-> **Änderungen ggü. v1** (Details: `Pruefbericht_Anleitung.md`):
-> 1. 🔴 Festo Pin 4 auf **`VOL`** (nicht „Flow") – sonst kein Volumenpuls.
-> 2. 🔴 Ethernet-Takt auf **GPIO0/CLK_OUT** (WROVER-POE2) in der Firmware.
-> 3. 🟠 **Externer Pull-up** wegen NPN-Mindestlaststrom 2 mA.
-> 4. 🟠 **Normbedingung** + **SP-Dimensionierung** ergänzt; **`GAS = Ar`** direkt.
-> 5. Firmware als **ESPHome** statt Arduino-Sketch (`firmware/`).
 
 ---
 
@@ -55,18 +48,33 @@ ESP32-POE2 **nicht** galvanisch isoliert ist → **isolierten PoE-Switch** verwe
 
 Festo Pin 2 (WH/weiß) bleibt frei. GPIO4 liegt auf UEXT **und** EXT1 – nur **einen** Header nutzen.
 
-### Schutzbeschaltung an GPIO4 (verpflichtend)
+### Vollständiges Verdrahtungsschema
+
+Versorgung (+24 V / 0 V) **und** Signalpfad in einem Bild — alles teilt sich dieselbe Masse:
 
 ```
-                3,3 V
-                  │
-               [1 kΩ]        ← Pull-up: sichert ≥ 2 mA NPN-Last (Festo-Spec)
-                  │
-Festo Pin4 ──┬────┴────[1 kΩ]──┬── GPIO4
- (OutA/Puls) │                 │
-             │              [Z 3,3 V]   (Kathode→GPIO4, Anode→GND)
-            (0V)               │
-                              GND
+   ESP32-POE2  (12/24-V-Jumper = 24 V)                 Festo SFAH (M8x1, NPN-Modus)
+   ═══════════════════════════════════                 ════════════════════════════
+
+   EXT1 Pin 1  VPP  (+24 V) ───────────── BN (braun) ──── Pin 1   +24 V
+   EXT1 Pin 2  GND  ( 0 V ) ───────────── BU (blau)  ──── Pin 3   0 V
+                                                          Pin 2   WH (weiß) → frei
+
+   Signalpfad / Schutzbeschaltung an GPIO4 (verpflichtend):
+
+        3,3 V
+          │
+       [1 kΩ]                    ← Pull-up: sichert ≥ 2 mA NPN-Last (Festo-Spec)
+          │
+          ├───────────────────── BK (schwarz) ────────── Pin 4   OutA / Volumenpuls
+          │
+       [1 kΩ]                    ← Vorwiderstand
+          │
+        GPIO4 ●  (ESP-Eingang)
+          │
+       [Z 3,3 V]                 ← Kathode → GPIO4, Anode → GND
+          │
+         GND  (= EXT1 Pin 2 / 0 V — gemeinsame Masse, keine Massescheife)
 ```
 
 Der NPN-Open-Collector zieht im aktiven Zustand gegen 0 V. Der **1-kΩ-Pull-up** gegen 3,3 V

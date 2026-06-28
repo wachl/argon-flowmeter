@@ -30,7 +30,7 @@ Flashen **per OTA über Ethernet** – kein USB-Stecken mehr an den 16 Geräten.
    python gen_devices.py
    ```
    > Der `liter_per_pulse`-Wert **muss exakt** dem am jeweiligen Festo-SFAH eingestellten
-   > Schwellwert **SP** entsprechen. Siehe `../Anleitung_Argon_Durchflussmesser_v2.md`, Schritt 6.
+   > Schwellwert **SP** entsprechen. Siehe `../Anleitung_Argon_Durchflussmesser.md`, Abschnitt 4.
 
 ## Erstes Flashen (einmalig, per USB)
 
@@ -112,4 +112,4 @@ Reset auch über Button (`Gesamtvolumen zurücksetzen`) im ESPHome-Dashboard / H
 - **`internal_filter: 30ms`** < Festo-Pulsbreite `PULS` (100 ms) → entprellt, ohne
   echte Pulse zu verschlucken.
 - **Pulssignal GPIO4** = UEXT Pin 3 / EXT1 Pin 19, kein Onboard-Pullup → externer
-  Pull-up am Sensoreingang nötig (Festo-NPN braucht ≥ 2 mA Last). Siehe Anleitung v2.
+  Pull-up am Sensoreingang nötig (Festo-NPN braucht ≥ 2 mA Last). Siehe Anleitung, Abschnitt 3.
