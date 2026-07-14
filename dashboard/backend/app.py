@@ -3,11 +3,13 @@
 Liest die MQTT-Telemetrie der ESPHome-Durchflussmesser, akkumuliert Verbrauch in
 stündliche Buckets (SQLite) und liefert REST-API + statisches Dashboard.
 
-Sensoren identifizieren sich über eine hardware-spezifische ID (MAC-abgeleitet) und
-veröffentlichen gas-neutral. Zuordnung (Name, Gas, Abteilung, Leck-/Downtime-Regeln)
-geschieht im Dashboard und liegt in sensors.json.
+Sensoren identifizieren sich über ihre konfigurierte machine_id (Firmware-Substitution)
+und veröffentlichen gas-neutral. Zuordnung (Name, Gas, Abteilung, Leck-/Downtime-Regeln)
+geschieht im Dashboard und liegt in sensors.json. Unbekannte IDs werden automatisch als
+"nicht zugeordnet" registriert und im Dashboard zugewiesen.
 
-MQTT-Vertrag (pro Sensor):
+MQTT-Vertrag (pro Sensor, Präfix iwb/gas/ – neues Schema – oder iwb/argon/ – Bestands-
+Firmware; beide werden ingestiert und auf dieselbe Sensor-ID gemappt):
     iwb/gas/<id>/status   retained  "online" | "offline"
     iwb/gas/<id>/flow                Nl/min   (Momentandurchfluss)
     iwb/gas/<id>/total               Nl       (monoton, persistent)
@@ -87,6 +89,56 @@ def sensor_leak(s: dict) -> dict:
 
 def sensor_downtime(s: dict) -> dict:
     return s.get("downtime") or default_downtime()
+
+
+def norm_leak(raw) -> dict | None:
+    """Leck-Schwellen prüfen/normalisieren. None bei ungültiger Eingabe."""
+    if not isinstance(raw, dict):
+        return None
+    try:
+        mn, ac = float(raw["min"]), float(raw["active"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not (0 <= mn < ac):
+        return None
+    return {"min": mn, "active": ac}
+
+
+def norm_downtime(raw) -> dict | None:
+    """Downtime-Regel prüfen/normalisieren. None bei ungültiger Eingabe.
+
+    Erwartet {enabled, max_nl, windows:[{days:[0-6 – Mo=0], start:"HH:MM", end:"HH:MM"|"24:00"}]}.
+    """
+    if not isinstance(raw, dict):
+        return None
+
+    def _valid_time(t: str, allow_24: bool) -> bool:
+        try:
+            h, m = _parse_hhmm(t)
+        except (AttributeError, TypeError, ValueError):
+            return False
+        if allow_24 and (h, m) == (24, 0):
+            return True
+        return 0 <= h <= 23 and 0 <= m <= 59
+
+    try:
+        enabled = bool(raw.get("enabled", False))
+        max_nl = float(raw.get("max_nl", 0.0))
+        if max_nl < 0:
+            return None
+        windows = []
+        for w in raw.get("windows", []) or []:
+            days = sorted({int(d) for d in w.get("days", [])})
+            start = str(w.get("start", "00:00"))
+            end = str(w.get("end", "24:00"))
+            if any(d < 0 or d > 6 for d in days):
+                return None
+            if not _valid_time(start, allow_24=False) or not _valid_time(end, allow_24=True):
+                return None
+            windows.append({"days": days, "start": start, "end": end})
+    except (TypeError, ValueError):
+        return None
+    return {"enabled": enabled, "max_nl": max_nl, "windows": windows}
 
 
 # --------------------------------------------------------------------------- DB
@@ -205,8 +257,8 @@ _mqtt_client = None
 
 
 def on_message(client, userdata, msg):
-    parts = msg.topic.split("/")          # iwb / gas / <id> / <leaf>
-    if len(parts) != 4 or parts[0] != "iwb" or parts[1] != "gas":
+    parts = msg.topic.split("/")          # iwb / gas|argon / <id> / <leaf>
+    if len(parts) != 4 or parts[0] != "iwb" or parts[1] not in ("gas", "argon"):
         return
     sid, leaf = parts[2], parts[3]
     if leaf == "cmd":
@@ -312,8 +364,9 @@ def start_mqtt() -> None:
 
     def _on_connect(c, userdata, flags, rc, properties=None):
         _broker_state["ingest_connected"] = (rc == 0)
-        print(f"[mqtt] Ingest verbunden mit {host}:{port} (rc={rc}), abonniere iwb/gas/#")
-        c.subscribe("iwb/gas/#")
+        print(f"[mqtt] Ingest verbunden mit {host}:{port} (rc={rc}), "
+              "abonniere iwb/gas/# + iwb/argon/#")
+        c.subscribe([("iwb/gas/#", 0), ("iwb/argon/#", 0)])
 
     def _on_disconnect(c, userdata, *args):
         _broker_state["ingest_connected"] = False
@@ -328,10 +381,14 @@ def start_mqtt() -> None:
 
 
 def publish_reset(sensor_id: str) -> bool:
-    """Reset-Kommando an das Gerät senden (Gesamtzähler nullen)."""
+    """Reset-Kommando an das Gerät senden (Gesamtzähler nullen).
+
+    Auf beiden Topic-Schemata, damit auch Bestands-Firmware (iwb/argon/) reagiert.
+    """
     if _mqtt_client is None:
         return False
     _mqtt_client.publish(f"iwb/gas/{sensor_id}/cmd", "reset")
+    _mqtt_client.publish(f"iwb/argon/{sensor_id}/cmd", "reset")
     return True
 
 
@@ -495,6 +552,11 @@ def build_payload() -> dict:
         "sensors": sensors_out,
         "unassigned": unassigned,
         "alarms": alarms,
+        "broker": {
+            "embedded": _broker_state.get("embedded", False),
+            "embedded_running": _broker_state.get("running", False),
+            "ingest_connected": _broker_state.get("ingest_connected", False),
+        },
     }
 
 
@@ -516,7 +578,11 @@ def api_health():
 
 @app.get("/api/sensors")
 def api_get_sensors():
-    """Registry inkl. Live-Status für den Sensor-Editor."""
+    """Registry inkl. Live-Status für den Sensor-Editor.
+
+    leak/downtime sind die Sensor-Overrides (null = Standardwerte greifen);
+    die Standardwerte selbst stehen in defaults.
+    """
     live = read_live()
     now_ts = int(time.time())
     stale = CONFIG.get("stale_seconds", 120)
@@ -527,12 +593,14 @@ def api_get_sensors():
         out.append({
             "id": s["id"], "name": s.get("name", s["id"]),
             "gas": s.get("gas"), "dept": s.get("dept"),
-            "leak": sensor_leak(s), "downtime": sensor_downtime(s),
+            "leak": s.get("leak"), "downtime": s.get("downtime"),
             "online": bool(fresh and (lv.get("status") == "online")),
+            "flow": round(float(lv.get("flow") or 0.0), 2) if fresh else 0.0,
             "total": round(float(lv.get("total") or 0.0), 1),
             "lastSeen": lv.get("updated"),
         })
-    return {"sensors": out, "departments": DEPARTMENTS, "gases": CONFIG.get("gases", {})}
+    return {"sensors": out, "departments": DEPARTMENTS, "gases": CONFIG.get("gases", {}),
+            "defaults": {"leak": default_leak(), "downtime": default_downtime()}}
 
 
 @app.post("/api/sensors/{sid}")
@@ -552,14 +620,27 @@ async def api_set_sensor(sid: str, req: Request):
             return JSONResponse({"ok": False, "error": "bad gas"}, status_code=400)
         s["gas"] = gas or None
     if "dept" in body:
-        s["dept"] = body["dept"] or None
-    if isinstance(body.get("leak"), dict):
-        try:
-            s["leak"] = {"min": float(body["leak"]["min"]), "active": float(body["leak"]["active"])}
-        except (KeyError, TypeError, ValueError):
-            return JSONResponse({"ok": False, "error": "bad leak"}, status_code=400)
-    if isinstance(body.get("downtime"), dict):
-        s["downtime"] = body["downtime"]
+        dept = body["dept"] or None
+        if dept is not None and not any(d["id"] == dept for d in DEPARTMENTS):
+            return JSONResponse({"ok": False, "error": "unknown dept"}, status_code=400)
+        s["dept"] = dept
+    if "leak" in body:                     # null -> Override entfernen (Defaults greifen)
+        if body["leak"] is None:
+            s.pop("leak", None)
+        else:
+            leak = norm_leak(body["leak"])
+            if leak is None:
+                return JSONResponse(
+                    {"ok": False, "error": "bad leak (0 <= min < active)"}, status_code=400)
+            s["leak"] = leak
+    if "downtime" in body:                 # null -> Override entfernen (Defaults greifen)
+        if body["downtime"] is None:
+            s.pop("downtime", None)
+        else:
+            dt = norm_downtime(body["downtime"])
+            if dt is None:
+                return JSONResponse({"ok": False, "error": "bad downtime"}, status_code=400)
+            s["downtime"] = dt
     save_sensors()
     return {"ok": True, "sensor": s}
 
@@ -604,6 +685,20 @@ async def api_departments(req: Request):
     DEPARTMENTS.append({"id": did, "name": name})
     save_sensors()
     return {"ok": True, "id": did}
+
+
+@app.delete("/api/departments/{did}")
+def api_delete_department(did: str):
+    """Abteilung löschen; zugeordnete Sensoren werden auf 'keine Abteilung' gesetzt."""
+    global DEPARTMENTS
+    if not any(d["id"] == did for d in DEPARTMENTS):
+        return JSONResponse({"ok": False, "error": "unknown dept"}, status_code=404)
+    DEPARTMENTS = [d for d in DEPARTMENTS if d["id"] != did]
+    for s in SENSORS.values():
+        if s.get("dept") == did:
+            s["dept"] = None
+    save_sensors()
+    return {"ok": True}
 
 
 @app.get("/api/config")
@@ -652,14 +747,17 @@ async def api_set_config(req: Request):
         if isinstance(body.get("defaults"), dict):
             dfl = CONFIG.setdefault("defaults", {})
             bd = body["defaults"]
-            if isinstance(bd.get("leak"), dict):
-                dfl.setdefault("leak", {})
-                if bd["leak"].get("min") is not None:
-                    dfl["leak"]["min"] = float(bd["leak"]["min"])
-                if bd["leak"].get("active") is not None:
-                    dfl["leak"]["active"] = float(bd["leak"]["active"])
-            if isinstance(bd.get("downtime"), dict):
-                dfl["downtime"] = bd["downtime"]
+            if "leak" in bd:
+                leak = norm_leak(bd["leak"])
+                if leak is None:
+                    return JSONResponse(
+                        {"ok": False, "error": "bad leak (0 <= min < active)"}, status_code=400)
+                dfl["leak"] = leak
+            if "downtime" in bd:
+                dt = norm_downtime(bd["downtime"])
+                if dt is None:
+                    return JSONResponse({"ok": False, "error": "bad downtime"}, status_code=400)
+                dfl["downtime"] = dt
         if isinstance(body.get("mqtt"), dict):
             mq = CONFIG.setdefault("mqtt", {})
             bm = body["mqtt"]

@@ -89,6 +89,8 @@ esphome dashboard .
 ## MQTT-Schnittstelle (pro Anlage)
 
 Topic-Präfix: `iwb/argon/<machine_id>` (z. B. `iwb/argon/anlage-01`).
+Das Dashboard-Backend abonniert dieses Präfix **und** das gas-neutrale `iwb/gas/<id>` —
+Bestandsgeräte brauchen für das Dashboard also kein Firmware-Update.
 
 | Topic | Richtung | Inhalt |
 |---|---|---|

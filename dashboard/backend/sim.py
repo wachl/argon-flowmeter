@@ -24,8 +24,13 @@ from pathlib import Path
 
 BASE = Path(__file__).parent
 CONFIG = json.loads((BASE / "config.json").read_text(encoding="utf-8"))
-MACHINES = json.loads((BASE / "machines.json").read_text(encoding="utf-8"))["machines"]
+_MACHINES_DATA = json.loads((BASE / "machines.json").read_text(encoding="utf-8"))
+MACHINES = _MACHINES_DATA["machines"]
 DB_PATH = BASE / CONFIG.get("db_file", "argon.db")
+SENSORS_FILE = BASE / "sensors.json"
+
+# Gas-Zuordnung der Demo-Anlagen (Produktion: Zuordnung im Dashboard)
+DEMO_GAS = {m["id"]: ("argon" if i < 7 else "nitrogen") for i, m in enumerate(MACHINES)}
 
 # Tagesbasisverbrauch (Nl/Tag) + Wochenend-Faktor + optionale Anomalie je Anlage
 PROFILE = {
@@ -67,7 +72,28 @@ def daily_value(base, wkf, anomaly, day_index, days, r):
     return v
 
 
+def ensure_demo_registry() -> None:
+    """Demo-Sensoren in sensors.json registrieren – nur wenn die Registry leer ist.
+
+    In Produktion (Registry enthält echte Sensoren) bleibt die Datei unangetastet.
+    """
+    data = json.loads(SENSORS_FILE.read_text(encoding="utf-8")) if SENSORS_FILE.exists() \
+        else {"departments": [], "sensors": []}
+    if data.get("sensors"):
+        print("sensors.json enthaelt bereits Sensoren – Registry unveraendert.")
+        return
+    data["departments"] = _MACHINES_DATA.get("departments", [])
+    data["sensors"] = [
+        {"id": m["id"], "name": m["name"], "gas": DEMO_GAS[m["id"]], "dept": m["dept"]}
+        for m in MACHINES
+    ]
+    SENSORS_FILE.write_text(
+        json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    print(f"Demo-Registry ({len(MACHINES)} Sensoren) -> {SENSORS_FILE.name}")
+
+
 def seed(days: int) -> None:
+    ensure_demo_registry()
     conn = sqlite3.connect(DB_PATH)
     conn.execute("CREATE TABLE IF NOT EXISTS hourly (machine TEXT, hour_ts INTEGER, nl REAL, PRIMARY KEY (machine, hour_ts))")
     conn.execute("CREATE TABLE IF NOT EXISTS live (machine TEXT PRIMARY KEY, flow REAL, total REAL, voltage REAL, status TEXT, updated INTEGER)")
@@ -152,7 +178,11 @@ def live(ids=None) -> None:
 
 
 def clear_db() -> None:
-    """Stand-in-/Demodaten entfernen: hourly, live und alarms leeren."""
+    """Stand-in-/Demodaten entfernen: hourly, live und alarms leeren.
+
+    Enthält sensors.json ausschliesslich die unveraenderte Demo-Registry, wird auch
+    sie geleert; eine angepasste (echte) Registry bleibt unangetastet.
+    """
     conn = sqlite3.connect(DB_PATH)
     for t in ("hourly", "live", "alarms"):
         try:
@@ -161,6 +191,18 @@ def clear_db() -> None:
             pass  # Tabelle existiert noch nicht
     conn.commit(); conn.close()
     print(f"DB geleert (hourly/live/alarms) -> {DB_PATH}")
+
+    if SENSORS_FILE.exists():
+        data = json.loads(SENSORS_FILE.read_text(encoding="utf-8"))
+        demo = {(m["id"], m["name"], DEMO_GAS[m["id"]], m["dept"]) for m in MACHINES}
+        current = {(s.get("id"), s.get("name"), s.get("gas"), s.get("dept"))
+                   for s in data.get("sensors", [])}
+        if current and current <= demo:
+            SENSORS_FILE.write_text('{\n  "departments": [],\n  "sensors": []\n}\n',
+                                    encoding="utf-8")
+            print(f"Demo-Registry entfernt -> {SENSORS_FILE.name}")
+        elif current:
+            print(f"{SENSORS_FILE.name} enthaelt angepasste Sensoren – unveraendert.")
 
 
 if __name__ == "__main__":
