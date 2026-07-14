@@ -99,55 +99,83 @@ def seed(days: int) -> None:
     print(f"Seed fertig: {n} Stunden-Buckets fuer {len(MACHINES)} Anlagen ueber {days} Tage -> {DB_PATH}")
 
 
-def live() -> None:
+def live(ids=None) -> None:
+    """Live-Telemetrie auf dem neuen Schema iwb/gas/<id>/... publizieren.
+
+    ids: Liste von Sensor-IDs; None -> alle aus machines.json.
+    """
     try:
         import paho.mqtt.client as mqtt
     except ImportError:
         sys.exit("paho-mqtt fehlt: pip install -r requirements.txt")
     mc = CONFIG["mqtt"]
-    client = mqtt.Client(client_id="argon-sim")
+    host = "127.0.0.1" if mc.get("embedded", True) else mc.get("broker", "127.0.0.1")
+    sensors = [m for m in MACHINES if not ids or m["id"] in ids]
+    if not sensors:
+        sys.exit(f"keine passenden Sensor-IDs: {ids}")
+
+    client = mqtt.Client(client_id="gas-sim")
     if mc.get("username"):
         client.username_pw_set(mc["username"], mc.get("password", ""))
-    client.connect(mc["broker"], mc.get("port", 1883), 30)
+    client.connect(host, mc.get("port", 1883), 30)
     client.loop_start()
 
-    totals = {m["id"]: PROFILE.get(m["id"], (3000, .5, None))[0] * 30.0 for m in MACHINES}
-    for m in MACHINES:
-        client.publish(f"iwb/argon/{m['id']}/status", "online", retain=True)
-    print("Live-Simulation läuft – STRG+C zum Beenden.")
+    totals = {m["id"]: 0.0 for m in sensors}   # absoluter Zählerstand egal – Backend nutzt nur Deltas
+    for m in sensors:
+        client.publish(f"iwb/gas/{m['id']}/status", "online", retain=True)
+    print(f"Live-Simulation ({len(sensors)} Sensor(en): {', '.join(m['id'] for m in sensors)}) "
+          f"auf {host}:{mc.get('port', 1883)} – STRG+C zum Beenden.")
     interval = 3.0
     try:
         while True:
             now = datetime.now()
             h = now.hour
-            for m in MACHINES:
+            for m in sensors:
                 mid = m["id"]
                 base, wkf, anomaly = PROFILE.get(mid, (3000, 0.5, None))
                 wkf = wkf if now.weekday() >= 5 else 1.0
-                daily = base * wkf
-                rate = daily * WT[h] / SUMW / 60.0          # Nl/min im Mittel dieser Stunde
+                rate = base * wkf * WT[h] / SUMW / 60.0          # Nl/min im Mittel dieser Stunde
                 rate *= 0.8 + 0.4 * (0.5 + 0.5 * math.sin(time.time() / 7 + len(mid)))
                 if anomaly and anomaly[0] == "leak" and rate < 0.4:
-                    rate = 0.4                                # Leerlauf-Leck
+                    rate = 0.4                                    # Leerlauf-Leck
                 rate = max(0.0, rate)
                 totals[mid] += rate * (interval / 60.0)
-                client.publish(f"iwb/argon/{mid}/flow", f"{rate:.2f}")
-                client.publish(f"iwb/argon/{mid}/total", f"{totals[mid]:.1f}")
-                client.publish(f"iwb/argon/{mid}/voltage", f"{24.0 + 0.2*math.sin(time.time()/30):.2f}")
+                client.publish(f"iwb/gas/{mid}/flow", f"{rate:.2f}")
+                client.publish(f"iwb/gas/{mid}/total", f"{totals[mid]:.1f}")
+                client.publish(f"iwb/gas/{mid}/voltage", f"{24.0 + 0.2*math.sin(time.time()/30):.2f}")
             time.sleep(interval)
     except KeyboardInterrupt:
-        for m in MACHINES:
-            client.publish(f"iwb/argon/{m['id']}/status", "offline", retain=True)
+        for m in sensors:
+            client.publish(f"iwb/gas/{m['id']}/status", "offline", retain=True)
         client.loop_stop()
         print("\nbeendet.")
+
+
+def clear_db() -> None:
+    """Stand-in-/Demodaten entfernen: hourly, live und alarms leeren."""
+    conn = sqlite3.connect(DB_PATH)
+    for t in ("hourly", "live", "alarms"):
+        try:
+            conn.execute(f"DELETE FROM {t}")
+        except sqlite3.OperationalError:
+            pass  # Tabelle existiert noch nicht
+    conn.commit(); conn.close()
+    print(f"DB geleert (hourly/live/alarms) -> {DB_PATH}")
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--seed", nargs="?", const=30, type=int, metavar="TAGE",
                     help="Synthetische Historie in die DB schreiben (Standard 30 Tage)")
+    ap.add_argument("--clear", action="store_true",
+                    help="DB-Daten leeren (hourly/live/alarms) – Stand-in-Daten entfernen")
+    ap.add_argument("--ids", metavar="ID[,ID...]",
+                    help="nur diese Sensor-IDs live publizieren (Standard: alle)")
     args = ap.parse_args()
-    if args.seed is not None:
+    if args.clear:
+        clear_db()
+    elif args.seed is not None:
         seed(args.seed)
     else:
-        live()
+        ids = [x.strip() for x in args.ids.split(",")] if args.ids else None
+        live(ids)

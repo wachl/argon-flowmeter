@@ -1,5 +1,6 @@
-/* Argon Monitoring – Frontend (vanilla, kein Build-Schritt).
-   Daten live aus dem Backend (GET /api/data). */
+/* Gas Monitoring – Frontend (vanilla, kein Build-Schritt).
+   Daten live aus dem Backend (GET /api/data), gas-neutral (Argon + Stickstoff).
+   Preise pro Gas -> die €/m³-Umschaltung ist gasabhängig. */
 (() => {
   "use strict";
 
@@ -10,7 +11,7 @@
   };
 
   const S = {                       // UI-State
-    range:'7d', unit:'m3', theme:'control',
+    range:'7d', unit:'m3', theme:'control', gas:'all',
     scope:{type:'total'}, sortKey:'cons', sortDir:'desc', hover:-1, now:Date.now()
   };
   let DATA = null;                  // letzte Backend-Antwort
@@ -18,20 +19,31 @@
 
   // ----------------------------------------------------------------- helpers
   const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-  const price = () => (DATA && DATA.pricePerM3 != null) ? DATA.pricePerM3 : 120;
-  const machines = () => (DATA && DATA.machines) || [];
+  const allSensors = () => (DATA && DATA.sensors) || [];
+  const gasesList = () => (DATA && DATA.gases) || [];
   const depts = () => (DATA && DATA.departments) || [];
   const refDates = () => (DATA && DATA.refDates) || [];
+  const alarms = () => (DATA && DATA.alarms) || [];
+  const unassigned = () => (DATA && DATA.unassigned) || [];
+  const priceOf = g => { const x = gasesList().find(z => z.id === g); return x ? x.pricePerM3 : 0; };
+  const gasName = g => { const x = gasesList().find(z => z.id === g); return x ? x.name : (g || '—'); };
+  const gasShort = g => g === 'nitrogen' ? 'N₂' : g === 'argon' ? 'Ar' : (gasName(g));
 
-  const toUnit = nl => { const m3 = nl/1000; return S.unit==='m3' ? m3 : m3*price(); };
+  // Sichtbare Sensoren = Gas-Filter angewandt
+  const sensors = () => S.gas === 'all' ? allSensors() : allSensors().filter(m => m.gas === S.gas);
+
   const fmtNum = (n,d) => (n==null||isNaN(n)) ? '—' : Number(n).toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d});
-  const fmtUnit = nl => { const v=toUnit(nl); if(S.unit==='m3'){const d=v<10?2:v<100?1:0; return fmtNum(v,d)+' m³';} return fmtNum(Math.round(v),0)+' €'; };
+  // Wert in gewählter Einheit für ein Sensor-Gas: Nl -> m³ oder €
+  const unitVal = (nl,gas) => S.unit==='m3' ? nl/1000 : nl/1000*priceOf(gas);
+  // formatiert einen bereits in der Einheit vorliegenden Wert
+  const fmtUnitVal = v => { if(S.unit==='m3'){const d=v<10?2:v<100?1:0; return fmtNum(v,d)+' m³';} return fmtNum(Math.round(v),0)+' €'; };
   const fmtM3 = nl => { const v=nl/1000, d=v<10?2:v<100?1:0; return fmtNum(v,d)+' m³'; };
-  const fmtEur = nl => fmtNum(Math.round(nl/1000*price()),0)+' €';
+  const fmtEurNl = (nl,gas) => fmtNum(Math.round(nl/1000*priceOf(gas)),0)+' €';
   const axisFmt = v => { if(S.unit==='m3') return fmtNum(v, v<10?1:0); if(v>=1000) return fmtNum(v/1000, v>=10000?0:1)+'k'; return fmtNum(Math.round(v),0); };
 
   const bucketsFor = m => S.range==='24h' ? m.hourly : S.range==='7d' ? m.daily.slice(23) : m.daily;
-  const rangeSum = m => bucketsFor(m).reduce((a,b)=>a+b,0);
+  const rangeNl = m => bucketsFor(m).reduce((a,b)=>a+b,0);
+  const rangeUnit = m => unitVal(rangeNl(m), m.gas);
   const WD = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
   const labelsFor = () => {
     if(S.range==='24h') return Array.from({length:24},(_,i)=>String(i).padStart(2,'0')+':00');
@@ -40,15 +52,16 @@
     return ds.map(d=>d.getDate()+'.'+(d.getMonth()+1));
   };
   const scopeMachines = () => {
-    const s=S.scope, ms=machines();
+    const s=S.scope, ms=sensors();
     if(s.type==='dept') return ms.filter(m=>m.deptId===s.id);
     if(s.type==='machine'){ const m=ms.find(x=>x.id===s.id); return m?[m]:ms; }
     return ms;
   };
+  // Chart-Serie direkt in der gewählten Einheit (gasabhängig aufsummiert)
   const seriesForScope = () => {
-    const ms=scopeMachines(), labels=labelsFor(), n=labels.length, vals=new Array(n).fill(0);
-    ms.forEach(m=>{ const b=bucketsFor(m); for(let i=0;i<n;i++) vals[i]+=(b[i]||0); });
-    return {vals,labels};
+    const ms=scopeMachines(), labels=labelsFor(), n=labels.length, vals=new Array(n).fill(0), nl=new Array(n).fill(0);
+    ms.forEach(m=>{ const b=bucketsFor(m); for(let i=0;i<n;i++){ vals[i]+=unitVal(b[i]||0, m.gas); nl[i]+=(b[i]||0); } });
+    return {vals,nl,labels};
   };
   const curPrev = m => {
     const s=a=>a.reduce((x,y)=>x+y,0);
@@ -57,13 +70,13 @@
     return {cur:s(m.daily.slice(15)), prev:s(m.daily.slice(0,15))};
   };
   const trendPct = ms => { let c=0,p=0; ms.forEach(m=>{const x=curPrev(m); c+=x.cur; p+=x.prev;}); return p<=0?0:(c-p)/p*100; };
-  const machineCurrent = m => Math.max(0, m.flow||0);     // live aus Backend
+  const machineCurrent = m => Math.max(0, m.flow||0);
   const levelColor = l => l==='critical'?'var(--danger)':'var(--warn)';
 
   // ------------------------------------------------------------------- chart
   const CW=900, CH=300, PL=58, PR=18, PT=16, PB=38;
   function chartSVG(){
-    const s=seriesForScope(); const vals=s.vals.map(toUnit); const n=vals.length;
+    const s=seriesForScope(); const vals=s.vals; const n=vals.length;
     const iw=CW-PL-PR, ih=CH-PT-PB;
     const max=Math.max(1, Math.max.apply(null, vals))*1.18;
     const X=i=> n<=1 ? PL+iw/2 : PL + i*(iw/(n-1));
@@ -88,7 +101,7 @@
       const tw=148,th=46; let tx=hx+12; if(tx+tw>CW-PR) tx=hx-12-tw; if(tx<PL)tx=PL; const ty=Math.max(PT,hy-th-8);
       out+=`<rect x="${tx}" y="${ty}" width="${tw}" height="${th}" rx="6" fill="var(--panel2)" stroke="var(--border)"/>`;
       out+=`<text x="${tx+12}" y="${ty+18}" font-size="11" fill="var(--mute)" font-family="var(--fontnum)">${esc(s.labels[hv])}</text>`;
-      out+=`<text x="${tx+12}" y="${ty+36}" font-size="15" fill="var(--text)" font-family="var(--fontnum)" font-weight="600">${esc(fmtUnit(s.vals[hv]))}</text>`;
+      out+=`<text x="${tx+12}" y="${ty+36}" font-size="15" fill="var(--text)" font-family="var(--fontnum)" font-weight="600">${esc(fmtUnitVal(vals[hv]))}</text>`;
     }
     out+='</svg>';
     return out;
@@ -116,18 +129,26 @@
   const seg = (active,val,act,label) =>
     `<button data-action="${act}" data-val="${val}" style="padding:6px 13px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;border:none;font-family:var(--fontnum);background:${active?'var(--accent)':'transparent'};color:${active?'var(--onacc)':'var(--dim)'}">${esc(label)}</button>`;
 
-  function render(){
-    const flat=machines();
-    if(!flat.length){ root.innerHTML=`<div style="padding:40px;font-family:var(--fontsans),sans-serif;color:#9db0cc">Warte auf Daten vom Backend …</div>`; applyTheme(); return; }
+  const ALERT_META = {
+    over:     {title:'Over-consumption',  detail:v=>'+'+Math.round(v*100)+'% über Erwartungswert', val:v=>'+'+Math.round(v*100)+'%'},
+    leak:     {title:'Idle-flow / leak',  detail:_=>'Fluss während Stillstand',                    val:v=>fmtNum(v,1)+' Nl/min'},
+    downtime: {title:'Downtime-Verbrauch',detail:_=>'Verbrauch im Downtime-Fenster',              val:v=>fmtM3(v)}
+  };
 
-    const totalNl=flat.reduce((a,m)=>a+rangeSum(m),0);
+  function render(){
+    if(!DATA){ root.innerHTML=`<div style="padding:40px;font-family:sans-serif;color:#9db0cc">Warte auf Daten vom Backend …</div>`; return; }
+    const flat=sensors();
+
+    const totalNl=flat.reduce((a,m)=>a+rangeNl(m),0);
+    const totalM3=totalNl/1000;
+    const totalCost=flat.reduce((a,m)=>a+rangeNl(m)/1000*priceOf(m.gas),0);
     const facTrend=trendPct(flat);
     const liveFlow=flat.reduce((a,m)=>a+machineCurrent(m),0);
     const activeN=flat.filter(m=>machineCurrent(m)>0.3).length;
     const onlineN=flat.filter(m=>m.status==='online').length;
-    const anomalies=flat.filter(m=>m.anomaly);
-    const critN=anomalies.filter(m=>m.anomaly.level==='critical').length;
-    const warnN=anomalies.length-critN;
+    const al=S.gas==='all'?alarms():alarms().filter(a=>a.gas===S.gas);
+    const critN=al.filter(a=>a.level==='critical').length;
+    const warnN=al.length-critN;
 
     const delChip=t=>{ const c=t>0.5?'var(--danger)':t<-0.5?'var(--good)':'var(--mute)'; return {delta:(t>=0?'+':'')+t.toFixed(0)+'%',deltaColor:c,deltaBg:`color-mix(in srgb,${c} 15%,transparent)`}; };
     const cc=delChip(facTrend);
@@ -135,86 +156,91 @@
     const rangeLabel = S.range==='24h'?'last 24 hours':S.range==='7d'?'last 7 days':'last 30 days';
 
     const kpis=[
-      Object.assign({label:'Consumption · '+rl,value:fmtM3(totalNl),sub:fmtEur(totalNl)+' at '+price()+' €/m³',valueColor:'var(--text)'},cc),
-      Object.assign({label:'Argon Cost',value:fmtEur(totalNl),sub:(totalNl/1000).toFixed(0)+' m³ total volume',valueColor:'var(--text)'},cc),
-      {label:'Live Flow',value:fmtNum(liveFlow,1)+' Nl/min',sub:activeN+' of '+flat.length+' machines running',valueColor:'var(--accent2)',delta:'LIVE',deltaColor:'var(--good)',deltaBg:'color-mix(in srgb,var(--good) 15%,transparent)'},
-      {label:'Active Alerts',value:String(anomalies.length),sub:critN+' critical · '+warnN+' warning',valueColor:anomalies.length?'var(--danger)':'var(--good)',delta:anomalies.length?'ATTN':'OK',deltaColor:anomalies.length?'var(--danger)':'var(--good)',deltaBg:`color-mix(in srgb,${anomalies.length?'var(--danger)':'var(--good)'} 15%,transparent)`}
+      Object.assign({label:'Consumption · '+rl,value:fmtM3(totalNl),sub:fmtNum(Math.round(totalCost),0)+' € gesamt',valueColor:'var(--text)'},cc),
+      Object.assign({label:'Gas-Kosten',value:fmtNum(Math.round(totalCost),0)+' €',sub:totalM3.toFixed(0)+' m³ · '+(S.gas==='all'?'alle Gase':gasName(S.gas)),valueColor:'var(--text)'},cc),
+      {label:'Live Flow',value:fmtNum(liveFlow,1)+' Nl/min',sub:activeN+' von '+flat.length+' aktiv',valueColor:'var(--accent2)',delta:'LIVE',deltaColor:'var(--good)',deltaBg:'color-mix(in srgb,var(--good) 15%,transparent)'},
+      {label:'Aktive Alarme',value:String(al.length),sub:critN+' kritisch · '+warnN+' Warnung',valueColor:al.length?'var(--danger)':'var(--good)',delta:al.length?'ATTN':'OK',deltaColor:al.length?'var(--danger)':'var(--good)',deltaBg:`color-mix(in srgb,${al.length?'var(--danger)':'var(--good)'} 15%,transparent)`}
     ];
 
-    const scopeSeries=seriesForScope(); const scopeTotalNl=scopeSeries.vals.reduce((a,b)=>a+b,0);
+    const scopeSeries=seriesForScope(); const scopeTotalUnit=scopeSeries.vals.reduce((a,b)=>a+b,0);
     const sc=delChip(trendPct(scopeMachines()));
-    let scopeLabel='All Departments', scopeSub='Facility-wide total';
-    if(S.scope.type==='dept'){ const d=depts().find(x=>x.id===S.scope.id); if(d){scopeLabel=d.name; scopeSub=flat.filter(m=>m.deptId===d.id).length+' machines in department';} }
-    if(S.scope.type==='machine'){ const m=flat.find(x=>x.id===S.scope.id); if(m){scopeLabel=m.name; scopeSub=m.deptName;} }
+    let scopeLabel='Alle Abteilungen', scopeSub='Werksweit';
+    if(S.scope.type==='dept'){ const d=depts().find(x=>x.id===S.scope.id); if(d){scopeLabel=d.name; scopeSub=flat.filter(m=>m.deptId===d.id).length+' Sensoren';} }
+    if(S.scope.type==='machine'){ const m=flat.find(x=>x.id===S.scope.id); if(m){scopeLabel=m.name; scopeSub=m.deptName+' · '+gasName(m.gas);} }
 
-    const maxDept=Math.max(1,...depts().map(d=>flat.filter(m=>m.deptId===d.id).reduce((a,m)=>a+rangeSum(m),0)));
-    const deptRows=depts().map(d=>{
-      const dm=flat.filter(m=>m.deptId===d.id); const nl=dm.reduce((a,m)=>a+rangeSum(m),0);
+    const deptAgg=depts().map(d=>({d, nl:flat.filter(m=>m.deptId===d.id).reduce((a,m)=>a+rangeUnit(m),0)}));
+    const maxDept=Math.max(1,...deptAgg.map(x=>x.nl));
+    const deptRows=deptAgg.map(({d,nl})=>{
+      const dm=flat.filter(m=>m.deptId===d.id); if(!dm.length) return '';
       const active=S.scope.type==='dept'&&S.scope.id===d.id; const hasAl=dm.some(m=>m.anomaly);
       return `<button data-action="scope-dept" data-id="${d.id}" style="text-align:left;border:none;background:${active?'var(--panel2)':'transparent'};border-radius:7px;padding:6px 8px;margin:-6px -8px;cursor:pointer;width:calc(100% + 16px)">
         <span style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:6px">
           <span style="font-size:12.5px;font-weight:600;color:${active?'var(--accent)':'var(--text)'}">${esc(d.name)}</span>
-          <span style="font-size:12px;font-family:var(--fontnum);font-weight:600;color:var(--text)">${esc(fmtUnit(nl))}</span></span>
+          <span style="font-size:12px;font-family:var(--fontnum);font-weight:600;color:var(--text)">${esc(fmtUnitVal(nl))}</span></span>
         <span style="display:block;height:7px;border-radius:4px;background:var(--panel2);overflow:hidden"><span style="display:block;height:100%;border-radius:4px;background:${hasAl?'var(--warn)':'var(--accent)'};width:${Math.round(nl/maxDept*100)}%"></span></span></button>`;
     }).join('');
 
-    const alertRows = anomalies.length ? anomalies.map(m=>{
-      const a=m.anomaly, isOver=a.type==='over';
-      const title=isOver?'Over-consumption':'Idle-flow / leak';
-      const detail=isOver?('+'+Math.round(a.pct*100)+'% above expected baseline'):'Argon flowing during scheduled downtime';
-      const value=isOver?fmtUnit(rangeSum(m)):fmtNum(machineCurrent(m),1)+' Nl/min';
+    const alertRows = al.length ? al.map(a=>{
+      const meta=ALERT_META[a.type]||{title:a.type,detail:_=>'',val:v=>String(v)};
       const color=levelColor(a.level);
-      return `<button data-action="scope-machine" data-id="${m.id}" style="text-align:left;display:flex;gap:11px;align-items:stretch;background:var(--panel2);border:1px solid var(--border);border-radius:9px;padding:10px 11px;cursor:pointer;width:100%">
+      return `<div style="display:flex;gap:11px;align-items:stretch;background:var(--panel2);border:1px solid var(--border);border-radius:9px;padding:10px 11px">
         <span style="width:3px;border-radius:3px;background:${color};flex:none"></span>
-        <span style="flex:1;min-width:0">
+        <button data-action="scope-machine" data-id="${a.sensor}" style="flex:1;min-width:0;text-align:left;background:none;border:none;cursor:pointer;padding:0;color:inherit">
           <span style="display:flex;align-items:center;justify-content:space-between;gap:8px">
-            <span style="font-size:12.5px;font-weight:600;color:var(--text)">${esc(title)}</span>
-            <span style="font-size:11px;font-family:var(--fontnum);font-weight:600;color:${color};flex:none">${esc(value)}</span></span>
-          <span style="display:block;font-size:11.5px;color:var(--dim);font-family:var(--fontnum);margin-top:2px">${esc(m.name+' · '+m.deptName)}</span>
-          <span style="display:block;font-size:11px;color:var(--mute);margin-top:3px">${esc(detail)}</span></span></button>`;
+            <span style="font-size:12.5px;font-weight:600;color:var(--text)">${esc(meta.title)}</span>
+            <span style="font-size:11px;font-family:var(--fontnum);font-weight:600;color:${color};flex:none">${esc(meta.val(a.value))}</span></span>
+          <span style="display:block;font-size:11.5px;color:var(--dim);font-family:var(--fontnum);margin-top:2px">${esc(a.sensorName+' · '+a.deptName+' · '+gasShort(a.gas))}</span>
+          <span style="display:block;font-size:11px;color:var(--mute);margin-top:3px">${esc(meta.detail(a.value))}</span></button>
+        <button data-action="ack" data-id="${a.id}" title="quittieren" style="flex:none;align-self:center;border:1px solid var(--border);background:var(--panel);color:var(--dim);border-radius:6px;padding:4px 8px;font-size:12px;cursor:pointer">✓</button></div>`;
     }).join('') : `<div style="font-size:12px;color:var(--mute);padding:6px 2px">Keine aktiven Alarme.</div>`;
 
-    // --- Machines-Tabelle (sortierbar)
+    // --- Sensor-Tabelle
     const dir=S.sortDir==='asc'?1:-1;
-    let rows=flat.map(m=>{ const consNl=rangeSum(m), cur=machineCurrent(m), tr=trendPct([m]), al=!!m.anomaly;
-      const statusLabel=al?'ALERT':(cur>0.3?'RUNNING':(m.status==='online'?'IDLE':'OFFLINE'));
-      const statusColor=al?levelColor(m.anomaly.level):(cur>0.3?'var(--good)':(m.status==='online'?'var(--mute)':'var(--mute)'));
-      return {m,consNl,cur,tr,al,statusLabel,statusColor}; });
+    let rows=flat.map(m=>{ const consNl=rangeNl(m), cur=machineCurrent(m), tr=trendPct([m]), an=!!m.anomaly;
+      const statusLabel=an?'ALERT':(cur>0.3?'RUNNING':(m.status==='online'?'IDLE':'OFFLINE'));
+      const statusColor=an?levelColor(m.anomaly.level):(cur>0.3?'var(--good)':'var(--mute)');
+      return {m,consNl,cur,tr,an,statusLabel,statusColor}; });
     rows.sort((a,b)=>{ let x,y; switch(S.sortKey){
       case'name':x=a.m.name;y=b.m.name;return x<y?-dir:x>y?dir:0;
+      case'gas':x=a.m.gas||'';y=b.m.gas||'';return x<y?-dir:x>y?dir:0;
       case'dept':x=a.m.deptName;y=b.m.deptName;return x<y?-dir:x>y?dir:0;
-      case'status':x=a.al?2:(a.cur>0.3?1:0);y=b.al?2:(b.cur>0.3?1:0);break;
+      case'status':x=a.an?2:(a.cur>0.3?1:0);y=b.an?2:(b.cur>0.3?1:0);break;
       case'flow':x=a.cur;y=b.cur;break; case'trend':x=a.tr;y=b.tr;break;
       default:x=a.consNl;y=b.consNl; } return (x-y)*dir; });
-    const colDefs=[['status','Status','left'],['name','Machine','left'],['dept','Department','left'],['flow','Live Nl/min','right'],['cons','Consumption','right'],['cost','Cost','right'],['trend','Trend','right']];
+    const colDefs=[['status','Status','left'],['name','Sensor','left'],['gas','Gas','left'],['dept','Abteilung','left'],['flow','Live Nl/min','right'],['cons','Verbrauch','right'],['cost','Kosten','right'],['trend','Trend','right']];
     const ths=colDefs.map(c=>{ const arrow=S.sortKey===c[0]?(S.sortDir==='asc'?' ↑':' ↓'):''; return `<th data-action="sort" data-key="${c[0]}" style="text-align:${c[2]};padding:7px 12px;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--mute);font-weight:600;border-bottom:1px solid var(--border);cursor:pointer;white-space:nowrap;user-select:none">${esc(c[1])}${arrow}</th>`; }).join('')
       + `<th style="text-align:right;padding:7px 12px;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--mute);font-weight:600;border-bottom:1px solid var(--border)">14-day</th>`;
     const trs=rows.map(r=>{ const m=r.m; const active=S.scope.type==='machine'&&S.scope.id===m.id;
-      const anim=r.al?'argblink 1.4s ease-in-out infinite':(r.cur>0.3?'argpulse 2.2s ease-in-out infinite':'none');
+      const anim=r.an?'argblink 1.4s ease-in-out infinite':(r.cur>0.3?'argpulse 2.2s ease-in-out infinite':'none');
       return `<tr data-action="scope-machine" data-id="${m.id}" style="cursor:pointer;background:${active?'var(--panel2)':'transparent'};border-bottom:1px solid var(--border)">
         <td style="padding:11px 12px;white-space:nowrap"><span style="display:inline-flex;align-items:center;gap:7px;font-size:11px;font-weight:600;font-family:var(--fontnum);color:${r.statusColor}"><span style="width:8px;height:8px;border-radius:50%;background:${r.statusColor};animation:${anim}"></span>${esc(r.statusLabel)}</span></td>
         <td style="padding:11px 12px;font-size:13px;font-weight:600;color:var(--text);white-space:nowrap">${esc(m.name)}</td>
+        <td style="padding:11px 12px;font-size:12px;color:var(--dim);white-space:nowrap">${esc(gasShort(m.gas))}</td>
         <td style="padding:11px 12px;font-size:12px;color:var(--dim);white-space:nowrap">${esc(m.deptName)}</td>
         <td style="padding:11px 12px;text-align:right;font-family:var(--fontnum);font-size:12.5px;color:var(--text);white-space:nowrap">${esc(fmtNum(r.cur,1))}</td>
-        <td style="padding:11px 12px;text-align:right;font-family:var(--fontnum);font-size:12.5px;font-weight:600;color:var(--text);white-space:nowrap">${esc(fmtUnit(r.consNl))}</td>
-        <td style="padding:11px 12px;text-align:right;font-family:var(--fontnum);font-size:12.5px;color:var(--dim);white-space:nowrap">${esc(fmtEur(r.consNl))}</td>
+        <td style="padding:11px 12px;text-align:right;font-family:var(--fontnum);font-size:12.5px;font-weight:600;color:var(--text);white-space:nowrap">${esc(fmtUnitVal(rangeUnit(m)))}</td>
+        <td style="padding:11px 12px;text-align:right;font-family:var(--fontnum);font-size:12.5px;color:var(--dim);white-space:nowrap">${esc(fmtEurNl(r.consNl,m.gas))}</td>
         <td style="padding:11px 12px;text-align:right;font-family:var(--fontnum);font-size:12.5px;font-weight:600;color:${r.tr>0.5?'var(--danger)':r.tr<-0.5?'var(--good)':'var(--mute)'};white-space:nowrap">${r.tr>=0?'▲ ':'▼ '}${esc(Math.abs(r.tr).toFixed(0))}%</td>
         <td style="padding:9px 12px;text-align:right">${sparkSVG(m.daily.slice(16),r.statusColor)}</td></tr>`;
     }).join('');
 
     const d=new Date(S.now);
     const clock=d.toLocaleTimeString('en-GB')+' · '+d.toLocaleDateString('en-GB',{day:'2-digit',month:'short'});
-    const mqttOk = onlineN>0;
+    const mqttOk=onlineN>0;
+    const gasSegs = seg(S.gas==='all','all','gas','Alle') + gasesList().map(g=>seg(S.gas===g.id,g.id,'gas',g.name)).join('');
+    const naN=unassigned().length;
 
     root.innerHTML = `
     <div style="min-height:100vh;background:var(--bg);background-image:var(--bgimg);color:var(--text);font-family:var(--fontsans);padding:18px 22px 30px">
       <header style="display:flex;flex-wrap:wrap;gap:18px;align-items:center;justify-content:space-between;margin-bottom:18px">
         <div style="display:flex;align-items:center;gap:13px">
-          <div style="width:40px;height:40px;border-radius:10px;background:var(--accent);color:var(--onacc);display:flex;align-items:center;justify-content:center;font-family:var(--fontnum);font-weight:600;font-size:17px">Ar</div>
-          <div><div style="font-size:17px;font-weight:600;line-height:1.1">Argon Monitoring</div>
+          <div style="width:40px;height:40px;border-radius:10px;background:var(--accent);color:var(--onacc);display:flex;align-items:center;justify-content:center;font-family:var(--fontnum);font-weight:600;font-size:15px">Gas</div>
+          <div><div style="font-size:17px;font-weight:600;line-height:1.1">Gas Monitoring</div>
           <div style="font-size:12px;color:var(--dim);margin-top:2px">iwb · TUM — Shopfloor Gas Telemetry</div></div>
         </div>
-        <div style="display:flex;flex-wrap:wrap;gap:18px;align-items:center">
+        <div style="display:flex;flex-wrap:wrap;gap:16px;align-items:center">
+          <div style="display:flex;flex-direction:column;gap:5px"><span style="font-size:9.5px;letter-spacing:.14em;color:var(--mute);font-weight:600">GAS</span>
+            <div style="display:inline-flex;background:var(--panel);border:1px solid var(--border);border-radius:9px;padding:3px;gap:2px">${gasSegs}</div></div>
           <div style="display:flex;flex-direction:column;gap:5px"><span style="font-size:9.5px;letter-spacing:.14em;color:var(--mute);font-weight:600">RANGE</span>
             <div style="display:inline-flex;background:var(--panel);border:1px solid var(--border);border-radius:9px;padding:3px;gap:2px">${seg(S.range==='24h','24h','range','24 H')}${seg(S.range==='7d','7d','range','7 D')}${seg(S.range==='30d','30d','range','30 D')}</div></div>
           <div style="display:flex;flex-direction:column;gap:5px"><span style="font-size:9.5px;letter-spacing:.14em;color:var(--mute);font-weight:600">UNIT</span>
@@ -223,10 +249,11 @@
             <div style="display:inline-flex;background:var(--panel);border:1px solid var(--border);border-radius:9px;padding:3px;gap:2px">${seg(S.theme==='control','control','theme','Control')}${seg(S.theme==='analytics','analytics','theme','Light')}${seg(S.theme==='technical','technical','theme','Mono')}</div></div>
           <div style="display:flex;flex-direction:column;gap:5px;align-items:flex-end">
             <div style="display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--dim);font-weight:600"><span style="width:8px;height:8px;border-radius:50%;background:${mqttOk?'var(--good)':'var(--danger)'};animation:argpulse 1.8s ease-in-out infinite"></span>${mqttOk?'MQTT ONLINE':'NO DATA'} · ${onlineN}/${flat.length}</div>
-            <div style="font-family:var(--fontnum);font-size:13px;color:var(--text)">${esc(clock)}</div></div>
-          <button data-action="open-settings" title="Settings" aria-label="Settings" style="border:1px solid var(--border);background:var(--panel);color:var(--dim);border-radius:9px;width:38px;height:38px;cursor:pointer;font-size:17px;line-height:1;align-self:flex-end">⚙</button>
+            <div id="clock" style="font-family:var(--fontnum);font-size:13px;color:var(--text)">${esc(clock)}</div></div>
         </div>
       </header>
+
+      ${naN?`<div style="background:color-mix(in srgb,var(--warn) 12%,transparent);border:1px solid var(--border);border-radius:var(--radius);padding:9px 14px;margin-bottom:14px;font-size:12.5px;color:var(--warn)">${naN} nicht zugeordnete${naN>1?' Sensoren':'r Sensor'} — Gas/Abteilung in sensors.json zuweisen.</div>`:''}
 
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(216px,1fr));gap:14px;margin-bottom:14px">
         ${kpis.map(k=>`<div style="background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);padding:15px 17px">
@@ -242,12 +269,12 @@
           <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start;justify-content:space-between">
             <div>
               <div style="display:flex;align-items:center;gap:9px">
-                <span style="font-size:13px;color:var(--dim);font-weight:600">Consumption trend</span>
+                <span style="font-size:13px;color:var(--dim);font-weight:600">Verbrauchs-Trend</span>
                 <span style="font-size:11px;font-family:var(--fontnum);color:var(--mute)">· ${esc(rangeLabel)}</span>
                 ${S.scope.type!=='total'?`<button data-action="reset-scope" style="font-size:11px;font-family:var(--fontnum);border:1px solid var(--border);background:var(--panel2);color:var(--dim);border-radius:20px;padding:3px 10px;cursor:pointer">✕ ${esc(scopeLabel)}</button>`:''}
               </div>
               <div style="display:flex;align-items:baseline;gap:11px;margin-top:8px">
-                <span style="font-family:var(--fontnum);font-size:32px;font-weight:600;letter-spacing:-.02em;color:var(--text)">${esc(fmtUnit(scopeTotalNl))}</span>
+                <span style="font-family:var(--fontnum);font-size:32px;font-weight:600;letter-spacing:-.02em;color:var(--text)">${esc(fmtUnitVal(scopeTotalUnit))}</span>
                 <span style="font-size:13px;font-weight:600;font-family:var(--fontnum);color:${sc.deltaColor}">${esc(sc.delta)}</span></div>
               <div style="font-size:12px;color:var(--mute);margin-top:3px">${esc(scopeSub)}</div>
             </div>
@@ -259,13 +286,13 @@
         <div style="flex:1 1 320px;display:flex;flex-direction:column;gap:14px;min-width:0">
           <div style="background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);padding:15px 17px">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-              <span style="font-size:13px;font-weight:600;color:var(--text)">Active Alerts</span>
-              <span style="font-size:11px;font-family:var(--fontnum);font-weight:600;color:var(--danger);background:color-mix(in srgb,var(--danger) 15%,transparent);padding:2px 9px;border-radius:20px">${anomalies.length}</span></div>
+              <span style="font-size:13px;font-weight:600;color:var(--text)">Aktive Alarme</span>
+              <span style="font-size:11px;font-family:var(--fontnum);font-weight:600;color:var(--danger);background:color-mix(in srgb,var(--danger) 15%,transparent);padding:2px 9px;border-radius:20px">${al.length}</span></div>
             <div style="display:flex;flex-direction:column;gap:9px">${alertRows}</div>
           </div>
           <div style="background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);padding:15px 17px">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:13px">
-              <span style="font-size:13px;font-weight:600;color:var(--text)">By Department</span>
+              <span style="font-size:13px;font-weight:600;color:var(--text)">Nach Abteilung</span>
               <span style="font-size:11px;font-family:var(--fontnum);color:var(--mute)">${S.unit==='m3'?'m³':'€'} · ${esc(rangeLabel)}</span></div>
             <div style="display:flex;flex-direction:column;gap:11px">${deptRows}</div>
           </div>
@@ -274,18 +301,17 @@
 
       <div style="background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);padding:16px 18px">
         <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;margin-bottom:12px">
-          <div style="display:flex;align-items:center;gap:10px"><span style="font-size:13px;font-weight:600;color:var(--text)">Machines</span>
+          <div style="display:flex;align-items:center;gap:10px"><span style="font-size:13px;font-weight:600;color:var(--text)">Sensoren</span>
             <span style="font-size:11px;font-family:var(--fontnum);color:var(--mute)">${flat.length} units</span></div>
-          <span style="font-size:11px;font-family:var(--fontnum);color:var(--mute)">Consumption &amp; cost · ${esc(rangeLabel)} · click a row to focus the chart</span></div>
+          <span style="font-size:11px;font-family:var(--fontnum);color:var(--mute)">Verbrauch &amp; Kosten · ${esc(rangeLabel)} · Zeile klicken fokussiert den Chart</span></div>
         <div style="overflow-x:auto;margin:0 -4px">
-          <table style="width:100%;border-collapse:collapse;min-width:720px">
+          <table style="width:100%;border-collapse:collapse;min-width:760px">
             <thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table>
         </div>
       </div>
     </div>`;
 
     applyTheme();
-    // Chart-Hover
     const host=document.getElementById('chart-host');
     if(host){
       host.addEventListener('mousemove',ev=>{ const i=chartIndexFromEvent(ev); if(i!==S.hover){S.hover=i; paintChart();} });
@@ -293,111 +319,24 @@
     }
   }
 
-  function applyTheme(){ const v=THEMES[S.theme]||THEMES.control; for(const k in v) root.firstElementChild && root.firstElementChild.style.setProperty(k,v[k]); document.body.style.setProperty('--border',v['--border']); }
+  function applyTheme(){ const v=THEMES[S.theme]||THEMES.control; const el=root.firstElementChild; if(el) for(const k in v) el.style.setProperty(k,v[k]); document.body.style.setProperty('--border',v['--border']); document.body.style.background=v['--bg']; }
 
   // ---------------------------------------------------------------- events
-  root.addEventListener('click', ev=>{
+  root.addEventListener('click', async ev=>{
     const el=ev.target.closest('[data-action]'); if(!el) return;
     const act=el.getAttribute('data-action');
     if(act==='range'){ S.range=el.getAttribute('data-val'); S.hover=-1; }
     else if(act==='unit'){ S.unit=el.getAttribute('data-val'); }
     else if(act==='theme'){ S.theme=el.getAttribute('data-val'); }
+    else if(act==='gas'){ S.gas=el.getAttribute('data-val'); S.scope={type:'total'}; }
     else if(act==='reset-scope'){ S.scope={type:'total'}; }
     else if(act==='sort'){ const k=el.getAttribute('data-key'); if(S.sortKey===k) S.sortDir=S.sortDir==='asc'?'desc':'asc'; else {S.sortKey=k;S.sortDir='desc';} }
     else if(act==='scope-dept'){ const id=el.getAttribute('data-id'); S.scope=(S.scope.type==='dept'&&S.scope.id===id)?{type:'total'}:{type:'dept',id}; }
     else if(act==='scope-machine'){ const id=el.getAttribute('data-id'); S.scope=(S.scope.type==='machine'&&S.scope.id===id)?{type:'total'}:{type:'machine',id}; }
-    else if(act==='open-settings'){ openSettings(); return; }
+    else if(act==='ack'){ ev.stopPropagation(); const id=el.getAttribute('data-id'); try{ await fetch('api/alarms/'+id+'/ack',{method:'POST'}); await poll(); }catch(e){} return; }
     else return;
     render();
   });
-
-  // --------------------------------------------------------------- settings
-  let CFG = null;
-  function applyThemeTo(el){ const v=THEMES[S.theme]||THEMES.control; for(const k in v) el.style.setProperty(k,v[k]); }
-  const closeSettings = () => { const o=document.getElementById('settings-overlay'); if(o) o.remove(); };
-
-  async function openSettings(){
-    try{ const r=await fetch('api/config',{cache:'no-store'}); CFG = r.ok ? await r.json() : null; }
-    catch(e){ CFG=null; }
-    renderSettings();
-  }
-
-  function renderSettings(){
-    closeSettings();
-    const c=CFG||{}, m=c.mqtt||{}, st=c.status||{}, leak=c.leak||{};
-    const fld=(label,inner,hint)=>`<label style="display:flex;flex-direction:column;gap:5px"><span style="font-size:12px;font-weight:600;color:var(--dim)">${esc(label)}</span>${inner}${hint?`<span style="font-size:11px;color:var(--mute)">${esc(hint)}</span>`:''}</label>`;
-    const ist="background:var(--panel2);border:1px solid var(--border);border-radius:7px;color:var(--text);padding:8px 10px;font-family:var(--fontnum);font-size:13px;width:100%";
-    const inp=(id,val,type,extra)=>`<input id="${id}" type="${type||'text'}" value="${esc(val==null?'':val)}" ${extra||''} style="${ist}">`;
-    const chk=(id,on,lbl)=>`<div style="display:flex;align-items:center;gap:8px;height:36px"><input id="${id}" type="checkbox" ${on?'checked':''} style="width:16px;height:16px;accent-color:var(--accent)"><span style="font-size:12px;color:var(--dim)">${esc(lbl)}</span></div>`;
-
-    const ov=document.createElement('div'); ov.id='settings-overlay';
-    ov.setAttribute('style','position:fixed;inset:0;z-index:9999;background:rgba(2,6,12,0.62);display:flex;align-items:flex-start;justify-content:center;padding:6vh 16px;overflow:auto;backdrop-filter:blur(2px)');
-    ov.innerHTML=`
-      <div style="width:540px;max-width:100%;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);box-shadow:0 24px 70px rgba(0,0,0,.55);font-family:var(--fontsans);color:var(--text)">
-        <div style="display:flex;align-items:center;justify-content:space-between;padding:15px 18px;border-bottom:1px solid var(--border)">
-          <div style="font-size:15px;font-weight:600">Settings</div>
-          <button data-action="close-settings" style="border:none;background:var(--panel2);color:var(--dim);border-radius:7px;width:30px;height:30px;cursor:pointer;font-size:15px">✕</button></div>
-        <div style="padding:18px;display:flex;flex-direction:column;gap:18px">
-          <div>
-            <div style="font-size:11px;letter-spacing:.1em;color:var(--mute);font-weight:700;text-transform:uppercase;margin-bottom:8px">MQTT Broker</div>
-            <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;font-size:12px;color:var(--dim)">
-              <span style="width:9px;height:9px;border-radius:50%;background:${st.embedded_running?'var(--good)':'var(--mute)'}"></span>broker ${st.embedded_running?'running':'stopped'}
-              <span style="width:9px;height:9px;border-radius:50%;background:${st.ingest_connected?'var(--good)':'var(--mute)'};margin-left:10px"></span>ingest ${st.ingest_connected?'connected':'waiting'}</div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-              ${fld('Embedded broker', chk('cf-embedded',m.embedded,'run broker in dashboard'))}
-              ${fld('Allow anonymous', chk('cf-anon',m.allow_anonymous,'accept any client'))}
-              ${fld('Bind address', inp('cf-bind',m.bind||'0.0.0.0'),'devices use this PC’s LAN IP')}
-              ${fld('Port', inp('cf-port',m.port==null?1883:m.port,'number'))}
-              ${fld('External broker host', inp('cf-extbroker',m.broker||''),'only used if embedded is off')}
-              ${fld('Username', inp('cf-user',m.username||''))}
-              <div style="grid-column:1 / -1">${fld('Password', inp('cf-pass','','password','placeholder="'+(m.has_password?'•••••• (unchanged)':'(none)')+'"'),'leave blank to keep current')}</div>
-            </div>
-          </div>
-          <div>
-            <div style="font-size:11px;letter-spacing:.1em;color:var(--mute);font-weight:700;text-transform:uppercase;margin-bottom:8px">Pricing &amp; Alerts</div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-              ${fld('Argon price (€/m³)', inp('cf-price',c.price_per_m3,'number','step="any"'))}
-              ${fld('Stale timeout (s)', inp('cf-stale',c.stale_seconds,'number'),'mark offline after')}
-              ${fld('Leak min (Nl/min)', inp('cf-leakmin',leak.min,'number','step="any"'))}
-              ${fld('Leak active (Nl/min)', inp('cf-leakact',leak.active,'number','step="any"'))}
-            </div>
-          </div>
-          <div id="settings-msg" style="font-size:12px;color:var(--mute);min-height:16px"></div>
-          <div style="display:flex;justify-content:flex-end;gap:10px">
-            <button data-action="close-settings" style="border:1px solid var(--border);background:var(--panel2);color:var(--dim);border-radius:8px;padding:9px 16px;cursor:pointer;font-weight:600;font-size:13px">Cancel</button>
-            <button data-action="save-settings" style="border:none;background:var(--accent);color:var(--onacc);border-radius:8px;padding:9px 18px;cursor:pointer;font-weight:700;font-size:13px">Save</button></div>
-        </div>
-      </div>`;
-    document.body.appendChild(ov);
-    applyThemeTo(ov);
-    ov.addEventListener('click', ev=>{
-      const el=ev.target.closest('[data-action]');
-      if(el){ const a=el.getAttribute('data-action'); if(a==='close-settings') return closeSettings(); if(a==='save-settings') return saveSettings(); }
-      if(ev.target===ov) closeSettings();
-    });
-  }
-
-  async function saveSettings(){
-    const v=id=>{ const e=document.getElementById(id); return e?e.value:undefined; };
-    const ck=id=>{ const e=document.getElementById(id); return e?e.checked:false; };
-    const num=x=>{ const n=parseFloat(x); return isNaN(n)?undefined:n; };
-    const body={
-      price_per_m3:num(v('cf-price')), stale_seconds:num(v('cf-stale')),
-      leak:{min:num(v('cf-leakmin')), active:num(v('cf-leakact'))},
-      mqtt:{ embedded:ck('cf-embedded'), allow_anonymous:ck('cf-anon'), bind:v('cf-bind'),
-             port:num(v('cf-port')), broker:v('cf-extbroker'), username:v('cf-user') }
-    };
-    const pw=v('cf-pass'); if(pw) body.mqtt.password=pw;
-    const msg=document.getElementById('settings-msg'); if(msg){ msg.style.color='var(--mute)'; msg.textContent='Saving …'; }
-    try{
-      const r=await fetch('api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-      const j=await r.json().catch(()=>({}));
-      if(r.ok && j.ok){
-        if(msg){ msg.style.color='var(--good)'; msg.textContent=j.restart_required?'Saved. Restart the dashboard for broker changes to take effect.':'Saved.'; }
-        poll(); setTimeout(closeSettings, j.restart_required?2800:900);
-      }else if(msg){ msg.style.color='var(--danger)'; msg.textContent='Save failed: '+(j.error||('HTTP '+r.status)); }
-    }catch(e){ if(msg){ msg.style.color='var(--danger)'; msg.textContent='Save failed: '+e; } }
-  }
 
   // ------------------------------------------------------------------ data
   async function poll(){
@@ -407,6 +346,6 @@
     }catch(e){ /* Backend evtl. noch nicht da */ }
   }
   setInterval(poll, 5000);
-  setInterval(()=>{ S.now=Date.now(); const c=document.querySelector('header .clock'); }, 1000);
+  setInterval(()=>{ S.now=Date.now(); const c=document.getElementById('clock'); if(c){ const d=new Date(S.now); c.textContent=d.toLocaleTimeString('en-GB')+' · '+d.toLocaleDateString('en-GB',{day:'2-digit',month:'short'}); } }, 1000);
   poll();
 })();

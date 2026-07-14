@@ -2,11 +2,21 @@
   "host": "0.0.0.0",
   "port": 8000,
   "db_file": "argon.db",
-  "price_per_m3": 120.0,
   "stale_seconds": 120,
-  "leak": {
-    "min": 0.2,
-    "active": 1.0
+  "gases": {
+    "argon": { "name": "Argon", "price_per_m3": 120 },
+    "nitrogen": { "name": "Nitrogen", "price_per_m3": 40 }
+  },
+  "defaults": {
+    "leak": { "min": 0.2, "active": 1.0 },
+    "downtime": {
+      "enabled": true,
+      "max_nl": 50.0,
+      "windows": [
+        { "days": [0, 1, 2, 3, 4], "start": "22:00", "end": "06:00" },
+        { "days": [5, 6], "start": "00:00", "end": "24:00" }
+      ]
+    }
   },
   "mqtt": {
     "embedded": true,

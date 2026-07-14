@@ -136,6 +136,15 @@ globals:
     type: float
     restore_value: false
     initial_value: "0.0"
+  # Debug-Live-Anzeige des Puls-Eingangs
+  - id: last_pulse_ms
+    type: uint32_t
+    restore_value: false
+    initial_value: "0"
+  - id: pulse_count
+    type: uint32_t
+    restore_value: false
+    initial_value: "0"
 
 sensor:
   # ---- Momentaner Durchfluss --------------------------------------------------
@@ -177,6 +186,8 @@ sensor:
             if (delta < 0) delta = x;   // Schutz, falls pulse_meter intern resettet
             id(last_raw) = x;
             id(vol_total) += delta;
+            id(last_pulse_ms) = millis();   // fuer Live-Puls-Anzeige (Web-Dashboard)
+            id(pulse_count) += 1;
         - component.update: argon_total_vol
 
   # ---- Persistentes Gesamtvolumen --------------------------------------------
@@ -208,8 +219,34 @@ sensor:
     state_topic: "iwb/argon/${machine_id}/uptime"
     entity_category: diagnostic
 
+  # ---- Debug: Live-Pulszähler (im Web-Dashboard hochzählen sehen) -------------
+  # Zum Verdrahtungs-/Sensortest: Sensor auslösen -> Zähler steigt.
+  - platform: template
+    name: "Pulse (Sitzung)"
+    id: puls_count_sensor
+    unit_of_measurement: "Pulse"
+    accuracy_decimals: 0
+    icon: "mdi:pulse"
+    entity_category: diagnostic
+    lambda: "return id(pulse_count);"
+    update_interval: 1s
+
 # Online/Offline-Verfügbarkeit kommt aus dem retained LWT-Topic .../status
 # (birth_message / will_message oben) – kein zusätzlicher status-binary_sensor nötig.
+
+# ----------------------------------------------------------------------------
+#  Live-Anzeige des Puls-Eingangs im eingebauten Web-Dashboard (Debug).
+#  "Puls-Eingang aktiv" leuchtet, solange Pulse eintreffen (letzter Puls < 400 ms).
+#  Getrieben aus den echten Puls-Events – pulse_meter belegt GPIO4 exklusiv, daher
+#  keine zweite GPIO-Belegung auf demselben Pin möglich.
+# ----------------------------------------------------------------------------
+binary_sensor:
+  - platform: template
+    name: "Puls-Eingang aktiv"
+    id: puls_input_active
+    device_class: running
+    lambda: |-
+      return id(last_pulse_ms) != 0 && (millis() - id(last_pulse_ms)) < 400;
 
 button:
   # Reset auch ueber API/ESPHome-Dashboard/Home Assistant moeglich

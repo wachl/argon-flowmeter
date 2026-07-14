@@ -1,0 +1,27 @@
+{
+  "departments": [
+    { "id": "battery",  "name": "Battery Production" },
+    { "id": "additive", "name": "Additive Manufacturing" },
+    { "id": "welding",  "name": "Welding & Joining" },
+    { "id": "heat",     "name": "Heat Treatment" },
+    { "id": "lab",      "name": "Metrology & Lab" }
+  ],
+  "sensors": [
+    { "id": "anlage-01", "name": "Cell Welder TIG-01",      "gas": "argon",    "dept": "battery"  },
+    { "id": "anlage-02", "name": "Cell Welder TIG-02",      "gas": "argon",    "dept": "battery"  },
+    { "id": "anlage-03", "name": "Tab Laser-Weld LW-03",    "gas": "argon",    "dept": "battery"  },
+    { "id": "anlage-04", "name": "Dry-Room Glovebox GB-01", "gas": "argon",    "dept": "battery"  },
+    { "id": "anlage-05", "name": "LPBF Printer AM-01",      "gas": "argon",    "dept": "additive" },
+    { "id": "anlage-06", "name": "LPBF Printer AM-02",      "gas": "argon",    "dept": "additive" },
+    { "id": "anlage-07", "name": "LPBF Printer AM-03",      "gas": "argon",    "dept": "additive" },
+    { "id": "anlage-08", "name": "MIG Station WS-01",       "gas": "nitrogen", "dept": "welding"  },
+    { "id": "anlage-09", "name": "TIG Station WS-02",       "gas": "nitrogen", "dept": "welding"  },
+    { "id": "anlage-10", "name": "Robotic Cell RC-01",      "gas": "nitrogen", "dept": "welding"  },
+    { "id": "anlage-11", "name": "Annealing Furnace HT-01", "gas": "nitrogen", "dept": "heat"     },
+    { "id": "anlage-12", "name": "Annealing Furnace HT-02", "gas": "nitrogen", "dept": "heat"     },
+    { "id": "anlage-13", "name": "Sintering Furnace SF-01", "gas": "nitrogen", "dept": "heat"     },
+    { "id": "anlage-14", "name": "Glovebox Lab GL-01",      "gas": "nitrogen", "dept": "lab"      },
+    { "id": "anlage-15", "name": "Calibration Bench CB-01", "gas": "nitrogen", "dept": "lab"      },
+    { "id": "anlage-16", "name": "ICP Spectrometer SP-01",  "gas": "nitrogen", "dept": "lab"      }
+  ]
+}

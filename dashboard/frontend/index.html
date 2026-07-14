@@ -21,6 +21,7 @@
 </head>
 <body>
   <div id="root"></div>
-  <script src="./app.js"></script>
+  <!-- Cache-Bust: lädt immer die aktuelle app.js (kleine Datei, LAN-Dashboard) -->
+  <script>(function(){var s=document.createElement('script');s.src='app.js?v='+Date.now();document.body.appendChild(s);})();</script>
 </body>
 </html>
