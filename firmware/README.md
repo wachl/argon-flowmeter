@@ -110,8 +110,15 @@ Reset auch über Button (`Gesamtvolumen zurücksetzen`) im ESPHome-Dashboard / H
 - **`api: reboot_timeout: 0s`** – sonst rebootet das Gerät alle 15 min, wenn **kein**
   Home-Assistant-Client verbunden ist (reiner MQTT-/Dashboard-Betrieb).
 - **Persistenter Totalizer** via `globals: restore_value: true` – das `pulse_meter`-
-  `total` allein überlebt einen Stromausfall **nicht**.
-- **`internal_filter: 30ms`** < Festo-Pulsbreite `PULS` (100 ms) → entprellt, ohne
-  echte Pulse zu verschlucken.
+  `total` allein überlebt einen Stromausfall **nicht**. `preferences: flush_interval: 10s`
+  begrenzt den Rückwärtssprung des Zählers nach hartem Stromausfall auf ≤ 10 s.
+- **Zähler-Reset** (MQTT `cmd`/Button) nullt zusätzlich das pulse_meter-Sitzungstotal
+  (`pulse_meter.set_total_pulses: 0`) – sonst springt der Zähler beim nächsten Puls
+  auf das Sitzungsvolumen zurück.
+- **`internal_filter: 30ms` im Modus `PULSE`** – zählt nur Pegel, die ≥ 30 ms stabil
+  anliegen (Festo-Pulsbreite `PULS` = 100 ms). Entprellt **und** filtert Störspitzen,
+  die im EDGE-Modus als Geisterverbrauch zählen würden.
+- **`timeout: 90s`** – ohne Pulse fällt der Momentandurchfluss nach 90 s auf 0
+  (vorher 5 min „Phantom-Fluss“ nach dem letzten Puls).
 - **Pulssignal GPIO4** = UEXT Pin 3 / EXT1 Pin 19, kein Onboard-Pullup → externer
   Pull-up am Sensoreingang nötig (Festo-NPN braucht ≥ 2 mA Last). Siehe Anleitung, Abschnitt 3.

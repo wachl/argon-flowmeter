@@ -29,8 +29,9 @@ substitutions:
   # groesser als Schaltflanken/Störungen.
   pulse_filter: "30ms"
   # Wird laenger als diese Zeit kein Puls gesehen, gilt der Durchfluss als 0.
-  # Bei sehr kleinem SP / sehr kleinem Durchfluss ggf. erhoehen.
-  flow_timeout: "5min"
+  # Kurz halten: pulse_meter haelt sonst nach dem letzten Puls minutenlang den
+  # letzten Momentanwert ("Phantom-Fluss"). Bei sehr kleinem SP ggf. erhoehen.
+  flow_timeout: "90s"
 
 esphome:
   name: ${device_name}
@@ -46,6 +47,12 @@ esp32:
 psram:
   mode: quad
   speed: 80MHz
+
+# Zaehlerstand (globals mit restore_value) alle 10 s statt 60 s ins NVS sichern:
+# begrenzt den Rueckwaertssprung des Zaehlers nach hartem Stromausfall.
+# Geschrieben wird nur bei geaendertem Wert -> NVS-Verschleiss unkritisch.
+preferences:
+  flush_interval: 10s
 
 # ----------------------------------------------------------------------------
 #  Netzwerk: nur Ethernet (PoE). WiFi und Ethernet sind in ESPHome nicht
@@ -115,9 +122,16 @@ mqtt:
     - topic: "iwb/argon/${machine_id}/cmd"
       payload: "reset"
       then:
+        # WICHTIG: auch das interne pulse_meter-Sitzungstotal nullen, sonst
+        # addiert der naechste Puls das komplette Sitzungsvolumen wieder auf
+        # (on_value: delta = x - last_raw mit last_raw = 0).
+        - pulse_meter.set_total_pulses:
+            id: argon_flow
+            value: 0
         - lambda: |-
             id(vol_total) = 0.0;
             id(last_raw) = 0.0;
+        - component.update: argon_total_vol
         - logger.log: "Gesamtvolumen via MQTT-Kommando zurueckgesetzt"
 
 # ----------------------------------------------------------------------------
@@ -165,6 +179,10 @@ sensor:
     icon: "mdi:gauge"
     accuracy_decimals: 2
     internal_filter: ${pulse_filter}
+    # PULSE: zaehlt nur Pegel, die >= internal_filter stabil anliegen (Festo-Puls
+    # PULS = 100 ms). Kurze Stoerspitzen, die im EDGE-Modus als Puls zaehlen
+    # wuerden (Geisterverbrauch), fallen damit raus.
+    internal_filter_mode: PULSE
     timeout: ${flow_timeout}
     filters:
       - multiply: ${liter_per_pulse}
@@ -255,7 +273,12 @@ button:
     icon: "mdi:restart"
     entity_category: config
     on_press:
+      # wie beim MQTT-Reset: pulse_meter-Sitzungstotal mit nullen
+      - pulse_meter.set_total_pulses:
+          id: argon_flow
+          value: 0
       - lambda: |-
           id(vol_total) = 0.0;
           id(last_raw) = 0.0;
+      - component.update: argon_total_vol
       - logger.log: "Gesamtvolumen via Button zurueckgesetzt"
