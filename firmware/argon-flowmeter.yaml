@@ -52,7 +52,7 @@ psram:
 # begrenzt den Rueckwaertssprung des Zaehlers nach hartem Stromausfall.
 # Geschrieben wird nur bei geaendertem Wert -> NVS-Verschleiss unkritisch.
 preferences:
-  flush_interval: 10s
+  flash_write_interval: 10s
 
 # ----------------------------------------------------------------------------
 #  Netzwerk: nur Ethernet (PoE). WiFi und Ethernet sind in ESPHome nicht

@@ -110,7 +110,7 @@ Reset auch über Button (`Gesamtvolumen zurücksetzen`) im ESPHome-Dashboard / H
 - **`api: reboot_timeout: 0s`** – sonst rebootet das Gerät alle 15 min, wenn **kein**
   Home-Assistant-Client verbunden ist (reiner MQTT-/Dashboard-Betrieb).
 - **Persistenter Totalizer** via `globals: restore_value: true` – das `pulse_meter`-
-  `total` allein überlebt einen Stromausfall **nicht**. `preferences: flush_interval: 10s`
+  `total` allein überlebt einen Stromausfall **nicht**. `preferences: flash_write_interval: 10s`
   begrenzt den Rückwärtssprung des Zählers nach hartem Stromausfall auf ≤ 10 s.
 - **Zähler-Reset** (MQTT `cmd`/Button) nullt zusätzlich das pulse_meter-Sitzungstotal
   (`pulse_meter.set_total_pulses: 0`) – sonst springt der Zähler beim nächsten Puls
