@@ -15,7 +15,7 @@ wird im Dashboard zugeordnet.
 
 ## End-to-End in Kürze
 
-1. **Sensor** parametrieren (Anleitung, Abschnitt 4): NPN, **Pin4 = VOL**, SP notieren,
+1. **Sensor** parametrieren (Anleitung, Abschnitt 4): NPN, **Pin4 = VOL/MASS**, SP notieren,
    GAS = Ar bzw. N2.
 2. **Firmware**: Gerätedatei `firmware/devices/gas-flow-NN.yaml` ist die Konfiguration
    der Messstelle — SP dort als `liter_per_pulse` eintragen → `esphome run`.

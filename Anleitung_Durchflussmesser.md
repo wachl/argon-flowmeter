@@ -86,29 +86,88 @@ Z-Diode klemmen GPIO4 sicher auf ≤ 3,3 V. GPIO4 hat **keinen** Onboard-Pullup 
 
 ---
 
-## 4. Festo SFAH konfigurieren (EDIT-/SPEC-Menü)
+## 4. Festo SFAH konfigurieren (Klick-Anleitung)
 
-Bedienung über die drei Tasten ([A], [Edit], [B]). [Edit] startet den EDIT-Modus.
+Quelle: Festo-Bedienungsanleitung **8228457, 2025-02d** (Menüstruktur Fig. 15; liegt als
+[`Festo_SFAH_Bedienungsanleitung_8228457_2025-02d.pdf`](Festo_SFAH_Bedienungsanleitung_8228457_2025-02d.pdf)
+im Repo). Für die
+ältere SFAH-Generation (Handbuch 8075046, 2017) gilt derselbe Ablauf, aber: im
+`GAS`-Menü gibt es dort **nur `Air` und `N2`** — **kein `Ar`**. Fehlt `Ar` im Menü, ist es
+ein Altgerät, das für Argon **nicht spezifiziert** ist (Betriebsmedium laut Datenblatt nur
+Druckluft/Stickstoff) → für Argon-Messstellen die aktuelle Generation verwenden.
 
-1. **Ausgangsart NPN:** Spec-Menü → Parameter **`bin / Out`** → **`NPN`**.
-2. **Pin 4 = Volumenpuls:** Spec-Menü → Parameter **`Pin4`** → **`VOL`**.  ⚠️ *nicht* `FLOW`!
-   (`FLOW` = Schwellschalter, `VOL` = Volumenpuls, `MASS` = Massepuls.)
-3. **Puls parametrieren** (EDIT → „Puls"):
-   - **`SP`** = Normvolumen je Puls. **Exakt notieren** → geht 1:1 in `liter_per_pulse` ein.
-     Dimensionierung: `SP ≥ Q_max[Nl/min] / 300` (Pulse dürfen bei 100 ms Breite nicht
-     verschmelzen). Beispiel SFAH-50: `SP = 0,2 Nl`.
-   - **`PULS`** = **100 ms**.
-   - **`LOGC`** = **`NO`** (Schließer).
-4. **Gas:** Spec-Menü → **`GAS`** → passend zum Gas der Anlage: **`Ar`** (Argon) oder
-   **`N2`** (Stickstoff). Die Firmware ist gas-neutral — die Gaswahl am Sensor sorgt nur
-   für die korrekte interne Umrechnung; die Zuordnung fürs Dashboard passiert dort.
-5. **Normbedingung:** **`REF / Cond`** bewusst wählen (DIN 1343 = 0 °C / ISO = 15 °C / 20 °C) und
-   **an allen Sensoren gleich** setzen. Korrekturfaktor bis +8,7 %!
-6. EDIT-Modus verlassen — Werte werden gespeichert.
+### Bedienlogik (drei Tasten)
 
-> **Tipp – Parameter replizieren:** Einen Sensor vollständig einstellen, dann via Festo-
-> Funktion „Parameter replizieren" (Spec → `MASt`) baugleich auf die anderen Sensoren
-> übertragen (IO-Link-Masterfunktion, nur baugleiche Varianten/Device-ID).
+| Taste | Wirkung |
+|---|---|
+| **[Edit]** kurz | EDIT-Modus starten; im Menü: blinkenden Wert **speichern** und zum nächsten Parameter |
+| **[A]** / **[B]** | blinkenden Wert bzw. Menüpunkt wechseln |
+| **[Edit]** 3 s halten | zurück in den RUN-Modus (geht auch von selbst per Timeout) |
+
+Blinkt **`Lock`**: Sicherheitscode mit [A]/[B] eingeben, dann [Edit]. Änderungen an den
+Ausgängen werden **sofort wirksam**.
+
+### Schritt 1 — Spec-Menü (Geräteeinstellungen)
+
+1. **[Edit]** drücken → `Edit` erscheint, `OutA` blinkt.
+2. Mit **[A]/[B]** bis **`Spec`** blinkt → **[Edit]**.
+3. Die Parameter kommen jetzt in **fester Reihenfolge**; jeweils mit [A]/[B] einstellen,
+   mit [Edit] speichern/weiter (nicht benötigte einfach mit [Edit] überspringen):
+
+| Nr. | Anzeige | Einstellung für uns | Hinweis |
+|---|---|---|---|
+| 1 | `Filt` | 64 ms lassen (Werk) | Tiefpassfilter |
+| 2 | `FLOW / Unit` | **`L.Min`** | Anzeigeeinheit |
+| 3 | `REF / Cond` | **`0 °C`** lassen (= DIN 1343, Werk) | **an allen Sensoren gleich!** 15 °C/20 °C skalieren die Werte um bis zu +8,7 % |
+| 4 | `GAS` | **`Ar`** bzw. **`N2`** (je Anlage) | Werk: `Air`. Danach leuchtet `Option` im Display — normal |
+| 5 | `FLOW / Path` | — | erscheint nur bei bidirektionalen Varianten |
+| 6 | `Z.Adj` | `ON` | erlaubt späteren Nullpunktabgleich |
+| 7 | `Sub.d` | `GAS` (empfohlen) | Unteranzeige im RUN-Modus zeigt dann dauerhaft das eingestellte Gas |
+| 8 | `Eco` | `di.ON` lassen | Display-Abschaltung |
+| 9 | `bin / Out` | **`NPN`** | Werk: `PNP` ⚠️ |
+| 10 | `Pin4 / bin` | **`VOL/MASS`** | Werk: `FLOW` ⚠️ **Der entscheidende Schalter:** Pin 4 wird vom Schaltausgang zum Pulsausgang. Bei Einheit `L.Min` ist es der **Volumen**puls |
+| 11 | `Pin2 / FLOW` | `bin` lassen | Pin 2 (WH) ist bei uns unbeschaltet |
+| 12 | `Code / Lock` | `OFF` | optional Sicherheitscode |
+| 13 | `MASt` | `OFF` | nur fürs Replizieren (s. u.) |
+
+4. **[Edit]** → zurück im RUN-Modus. Oben im Display steht jetzt **`Puls`** (statt `OutA`)
+   — daran erkennt man, dass Pin 4 als Pulsausgang läuft.
+
+### Schritt 2 — Puls-Menü (erscheint erst nach Schritt 1!)
+
+Das `Puls`-Menü ersetzt das `OutA`-Menü, sobald `Pin4 / bin` auf `VOL/MASS` steht.
+
+1. **[Edit]** drücken → mit **[A]/[B]** **`Puls`** wählen → **[Edit]**.
+2. **`SP`** blinkt (mit Volumeneinheit) = Normvolumen je Puls. Mit [A]/[B] einstellen und
+   **exakt notieren** → geht 1:1 in `liter_per_pulse` der Gerätedatei ein.
+   Dimensionierung: `SP ≥ Q_max[Nl/min] / 300` (Pulse dürfen bei 100 ms Breite nicht
+   verschmelzen). Beispiel SFAH-50: `SP = 0,2 Nl`.
+3. **[Edit]** → **`PULS`** = **100 ms** lassen (Werk; Bereich 20–995 ms — nicht unter
+   60 ms, sonst greift der 30-ms-Störfilter der ESP32-Firmware nicht mehr sauber).
+4. **[Edit]** → **`LOGC`** = **`NO`** (Schließer, Werk).
+5. **[Edit]** → fertig, RUN-Modus.
+
+### Schritt 3 — Kontrolle
+
+- **SHOW-Modus** (nichts wird verändert): **[A] doppelklicken** → zeigt nacheinander
+  `SP`, `PULS`, `LOGC`; mit [A] weiterblättern. [B]-Doppelklick zeigt entsprechend
+  `REF/Cond`, `GAS`.
+- Im RUN-Modus schaltet **[B]** die Anzeige auf das kumulierte Volumen, **[A]** zurück
+  auf den Durchfluss.
+- **Nullpunktabgleich** (optional, bei anstehendem Betriebsdruck **ohne** Durchfluss):
+  **[A] + [B] + [Edit] gleichzeitig** drücken → `OK` = erfolgreich, `FAIL` = Voraussetzungen
+  prüfen (Z.Adj = ON, Messwert nahe 0).
+
+> **Tipp – Parameter replizieren (`MASt`):** Einen Sensor vollständig einstellen, dann auf
+> baugleiche Sensoren übertragen (gleicher Messbereich = gleiche Device-ID!): beide
+> Sensoren an 24 V/0 V, die **BK-Leitungen (Pin 4) miteinander verbinden**. Der
+> Ziel-Sensor muss im **Werkszustand (PNP, ungeschaltet)** sein — also **erst
+> replizieren, dann ggf. dort nichts mehr umstellen** (NPN usw. kommt mit). Am Master:
+> Spec → `MASt` → `ON` → [Edit] → `REPL`/`REdY` → [A] oder [B] drücken = übertragen;
+> für weitere Sensoren wiederholen, [Edit] beendet.
+>
+> **Werksreset:** [A] + [B] beim Einschalten gedrückt halten, dann zusätzlich [Edit] →
+> `RSto PArM`.
 >
 > **Aufwärmzeit:** Nach dem Einschalten ca. **10 Minuten** bis zur spezifizierten Genauigkeit.
 
@@ -149,7 +208,7 @@ Topic-Präfix je Anlage: `iwb/gas/<machine_id>` (Bestandsgeräte mit alter Firmw
 ## 7. Inbetriebnahme-Check
 
 - [ ] Jumper auf **24 V**
-- [ ] Festo: **NPN** / **Pin4 = VOL** / **LOGC = NO** / **PULS = 100 ms** / **SP** gesetzt & notiert
+- [ ] Festo: **NPN** / **Pin4 = VOL/MASS** / **LOGC = NO** / **PULS = 100 ms** / **SP** gesetzt & notiert (Display zeigt oben `Puls`)
 - [ ] Festo: **GAS = Ar bzw. N2** (passend zur Anlage), **REF/Cond** hallenweit einheitlich
 - [ ] `liter_per_pulse` in `devices/gas-flow-NN.yaml` = notierter SP-Wert
 - [ ] Schutzbeschaltung **inkl. 1 kΩ Pull-up** an GPIO4
@@ -164,8 +223,9 @@ Topic-Präfix je Anlage: `iwb/gas/<machine_id>` (Bestandsgeräte mit alter Firmw
 
 - **Auflösung/Live-Durchfluss:** Pulsweg ist für **Volumen** ideal; der Momentan-Durchfluss ist
   bei kleinem Flow grob/träge. Für flüssigen Live-Wert: Analog-/IO-Link-Auswertung (nicht vorgesehen).
-- **Genauigkeit gasabhängig:** für Argon Nullpunkt ±2 % FS, Spanne ±4 % FS (verifiziert);
-  Werte für Stickstoff der SFAH-Genauigkeitstabelle entnehmen. Einlaufstrecke nach Festo 6.1.1 beachten.
+- **Genauigkeit gasabhängig** (Bedienungsanleitung 2025-02d, Tab. 42): Nullpunkt
+  Luft/N2 ±1 % FS, Argon ±2 % FS; Spanne Luft/N2 ±2 % FS, Argon ±4 % FS (ohne Nutzung
+  des Durchfluss-Abgangs). Einlaufstrecke nach Festo 6.1.1 beachten.
 - **Schutzart IP40:** nur Innenraum/Schaltschrank; in rauer Halle Sensor/Elektronik schützen.
 - **Persistenz:** Gesamtvolumen in der Firmware via `restore_value` gesichert (übersteht Reboot).
 - **IO-Link-Alternative:** Direktzugriff auf kumulierten Messwert + Ferndiagnose über Pin 2 (C/Q)
