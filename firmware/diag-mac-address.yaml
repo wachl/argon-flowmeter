@@ -2,7 +2,7 @@
 #  DIAGNOSE-Firmware – nur die Ethernet-MAC-Adresse ausgeben (z. B. für
 #  Netzwerk-Freischaltung / DHCP-Reservierung). KEINE Mess-/MQTT-Funktion.
 #  Einmalig flashen, MAC ablesen, danach die richtige Firmware
-#  (devices/gas-flow-XX.yaml) aufspielen.
+#  (gas-flowmeter.yaml) aufspielen.
 #
 #  Olimex ESP32-POE2. Selbst-enthaltend (keine secrets.yaml nötig).
 #  Flashen (USB):   esphome run diag-mac-address.yaml

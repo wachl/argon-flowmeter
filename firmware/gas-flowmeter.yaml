@@ -1,14 +1,24 @@
 # =============================================================================
-#  Gas-Durchflussmesser (Argon, Stickstoff, ...)  –  gemeinsames ESPHome-Package
-#  Olimex ESP32-POE2 (WROVER-E N4R8)  +  Festo SFAH (Volumenpuls-Ausgang)
+#  Gas-Durchflussmesser (Argon, Stickstoff, ...)  –  EINE Firmware fuer alle
+#  Geraete. Olimex ESP32-POE2 (WROVER-E N4R8) + Festo SFAH (Volumenpuls).
 #  iwb / TUM
 #
-#  Die Firmware ist gas-neutral: WELCHES Gas eine Anlage verbraucht, wird erst
-#  im Dashboard zugeordnet (Sensor-Manager). Hier zaehlt nur der Volumenpuls.
+#  Diese Datei wird DIREKT geflasht (esphome run gas-flowmeter.yaml) — es gibt
+#  keine Geraete-Dateien mehr. Identitaet und Kennwerte kommen zur Laufzeit:
+#   - Hostname   = gas-flow-<MAC-Suffix>  (eindeutig je Geraet)
+#   - IP         = vom DHCP an die eindeutige MAC vergeben (im Router
+#                  reservieren -> stabile IP je Geraet)
+#   - Anlagen-ID (= Sensor-ID im Dashboard und in den MQTT-Topics) und
+#     SP-Wert (Nl/Puls, muss dem Festo-SP entsprechen) werden im
+#     Geraete-Webinterface  http://<IP>/  eingestellt und ueberleben
+#     Reboot/Stromausfall (NVS). Ohne konfigurierte Anlagen-ID publiziert das
+#     Geraet als "gas-<MAC-Suffix>" und erscheint im Dashboard automatisch
+#     als "nicht zugeordnet".
 #
-#  Diese Datei wird NICHT direkt geflasht. Sie wird von den Geräte-Dateien
-#  unter  devices/gas-flow-XX.yaml  via  packages:  eingebunden.
-#  Jede Geräte-Datei setzt nur ihre eigenen substitutions (Name, SP-Wert ...).
+#  Alle MQTT-Topics entstehen zur Laufzeit aus der Anlagen-ID
+#  (iwb/gas/<anlagen-id>/...); die eingebaute Topic-Ableitung von ESPHome ist
+#  deshalb deaktiviert (topic_prefix: null) und LWT/Birth werden beim Boot per
+#  Lambda gesetzt (siehe on_boot).
 #
 #  Verifizierte Hardware-Fakten (Stand Olimex-Handbuch Rev. 2.7 / Festo SFAH 2025-02d):
 #   - Ethernet-Takt liegt auf GPIO0 (WROVER!), Modus CLK_OUT  -> offizielles
@@ -17,19 +27,12 @@
 #   - Pulssignal auf GPIO4 (= UEXT Pin 3 / EXT1 Pin 19), kein Onboard-Pullup
 # =============================================================================
 
-# ---- Vorgabewerte; werden je Gerät in devices/gas-flow-XX.yaml überschrieben
+# ---- Hardware-Konstanten (fuer alle Geraete identisch)
 substitutions:
-  device_name: "gas-flow-xx"
-  friendly_name: "Gas Flow XX"
-  # machine_id geht in die MQTT-Topics ein:  iwb/gas/<machine_id>/...
-  machine_id: "anlage-xx"
-  # Pulswertigkeit = der am Festo-SFAH eingestellte Schwellwert "SP"
-  # (Normvolumen je Puls, Einheit Nl). MUSS exakt dem Sensor-SP entsprechen!
-  liter_per_pulse: "1.0"
   # Pin des Volumenpulses
   pulse_pin: "GPIO4"
   # Entprellung: kleiner als die Festo-Pulsbreite PULS (real 75 ms, Werk 100 ms),
-  # groesser als Schaltflanken/Störungen.
+  # groesser als Schaltflanken/Stoerungen.
   pulse_filter: "30ms"
   # Wird laenger als diese Zeit kein Puls gesehen, gilt der Durchfluss als 0.
   # Kurz halten: pulse_meter haelt sonst nach dem letzten Puls minutenlang den
@@ -37,9 +40,55 @@ substitutions:
   flow_timeout: "90s"
 
 esphome:
-  name: ${device_name}
-  friendly_name: ${friendly_name}
-  comment: "Gas-Durchflussmesser ${machine_id} (Olimex ESP32-POE2 + Festo SFAH)"
+  name: gas-flow
+  # Eindeutiger Hostname je Geraet: gas-flow-<letzte 3 MAC-Oktette>
+  name_add_mac_suffix: true
+  friendly_name: Gas Flow
+  comment: "Gas-Durchflussmesser (Olimex ESP32-POE2 + Festo SFAH), Einheits-Firmware"
+  includes:
+    - gas_id.h
+  on_boot:
+    # Prio 600: nach dem NVS-Restore der Template-Entitaeten und globals
+    # (Setup-Prio 800), aber vor dem MQTT-Setup (Prio 250). Nur hier lassen
+    # sich LWT/Birth auf die Laufzeit-Topics setzen — sie werden beim
+    # Verbinden uebertragen und sind danach fix.
+    - priority: 600
+      then:
+        - lambda: |-
+            id(active_id) = gas_machine_id(id(machine_id_cfg).state);
+            id(booted) = true;
+            ESP_LOGI("gas", "Anlagen-ID: %s", id(active_id).c_str());
+
+            std::string st = "iwb/gas/" + id(active_id) + "/status";
+            mqtt::MQTTMessage birth;
+            birth.topic = st; birth.payload = "online"; birth.qos = 0; birth.retain = true;
+            mqtt::global_mqtt_client->set_birth_message(std::move(birth));
+            mqtt::MQTTMessage will;
+            will.topic = st; will.payload = "offline"; will.qos = 0; will.retain = true;
+            mqtt::global_mqtt_client->set_last_will(std::move(will));
+            mqtt::MQTTMessage down;
+            down.topic = st; down.payload = "offline"; down.qos = 0; down.retain = true;
+            mqtt::global_mqtt_client->set_shutdown_message(std::move(down));
+
+            // Reset-Kommando: Wildcard-Subscription, Filterung auf die eigene
+            // (zur Laufzeit aenderbare) ID im Callback. Die Subscription wird
+            // von ESPHome bei jedem Reconnect automatisch erneuert.
+            mqtt::global_mqtt_client->subscribe(
+                "iwb/gas/+/cmd",
+                [](const std::string &topic, const std::string &payload) {
+                  if (topic != gas_topic(id(machine_id_cfg).state, "cmd"))
+                    return;
+                  if (payload == "reset") {
+                    // WICHTIG: auch das interne pulse_meter-Sitzungstotal
+                    // nullen, sonst addiert der naechste Puls das komplette
+                    // Sitzungsvolumen wieder auf (delta = x - last_raw).
+                    id(gas_flow).set_total_pulses(0);
+                    id(vol_total) = 0.0f;
+                    id(last_raw) = 0.0f;
+                    id(total_vol).update();
+                    ESP_LOGI("gas", "Gesamtvolumen via MQTT-Kommando zurueckgesetzt");
+                  }
+                });
 
 esp32:
   board: esp32dev
@@ -81,7 +130,8 @@ logger:
 #         WICHTIG: reboot_timeout 0s, sonst rebootet das Geraet alle 15 min,
 #         wenn KEIN Home-Assistant-Client verbunden ist (reiner MQTT-Betrieb).
 #  - ota: Firmware-Updates ueber Ethernet (kein USB-Stecken mehr noetig)
-#  - web_server: kleine Status-Webseite je Geraet (Port 80)
+#  - web_server: Konfigurations- und Status-Seite je Geraet (Port 80).
+#         local: true -> JS liegt im Geraet, funktioniert ohne Internetzugang.
 # ----------------------------------------------------------------------------
 api:
   encryption:
@@ -95,6 +145,7 @@ ota:
 web_server:
   port: 80
   version: 3
+  local: true
 
 time:
   - platform: sntp
@@ -102,49 +153,123 @@ time:
 
 # ----------------------------------------------------------------------------
 #  MQTT (fuer das kundenspezifische Dashboard / herstellerunabhaengige Anbindung)
-#  Topic-Praefix je Anlage, gas-neutral. Status als retained LWT (online/offline).
-#  (Bestandsgeraete mit alter Firmware publizierten auf iwb/argon/<machine_id>;
-#   das Dashboard-Backend versteht beide Praefixe und mappt auf dieselbe ID.)
-#  ESPHome veroeffentlicht jede Entität unter:
-#     iwb/gas/<machine_id>/sensor/<object_id>/state
-#  Kommandos (Reset) ueber:  iwb/gas/<machine_id>/cmd
+#  Topics je Anlage: iwb/gas/<anlagen-id>/{status,flow,total,voltage,uptime,meta}
+#  Kommandos (Reset): iwb/gas/<anlagen-id>/cmd  ->  "reset"
+#  topic_prefix: null -> keine automatischen ESPHome-Topics; alles laeuft ueber
+#  die Laufzeit-Publishes unten (die Anlagen-ID ist erst zur Laufzeit bekannt).
 # ----------------------------------------------------------------------------
 mqtt:
   broker: !secret mqtt_broker
   username: !secret mqtt_user
   password: !secret mqtt_password
-  topic_prefix: "iwb/gas/${machine_id}"
-  birth_message:
-    topic: "iwb/gas/${machine_id}/status"
-    payload: "online"
-    retain: true
-  will_message:
-    topic: "iwb/gas/${machine_id}/status"
-    payload: "offline"
-    retain: true
-  on_message:
-    # Reset des persistenten Gesamtzaehlers per:  ...<machine_id>/cmd  ->  "reset"
-    - topic: "iwb/gas/${machine_id}/cmd"
-      payload: "reset"
-      then:
-        # WICHTIG: auch das interne pulse_meter-Sitzungstotal nullen, sonst
-        # addiert der naechste Puls das komplette Sitzungsvolumen wieder auf
-        # (on_value: delta = x - last_raw mit last_raw = 0).
-        - pulse_meter.set_total_pulses:
-            id: gas_flow
-            value: 0
-        - lambda: |-
-            id(vol_total) = 0.0;
-            id(last_raw) = 0.0;
-        - component.update: total_vol
-        - logger.log: "Gesamtvolumen via MQTT-Kommando zurueckgesetzt"
+  topic_prefix: null
+  discovery: false
+  on_connect:
+    - script.execute: publish_meta
+
+# ----------------------------------------------------------------------------
+#  Laufzeit-Konfiguration (Geraete-Webinterface, NVS-persistent)
+# ----------------------------------------------------------------------------
+number:
+  # Pulswertigkeit = der am Festo-SFAH eingestellte Schwellwert "SP"
+  # (Normvolumen je Puls, Einheit Nl). MUSS exakt dem Sensor-SP entsprechen!
+  # Wirkt sofort (kein Neustart, kein Neu-Flashen) und nur auf kuenftige Pulse.
+  - platform: template
+    name: "SP-Wert (Nl pro Puls)"
+    id: sp_value
+    entity_category: config
+    icon: "mdi:counter"
+    unit_of_measurement: "Nl"
+    optimistic: true
+    restore_value: true
+    initial_value: 1.0
+    min_value: 0.001
+    max_value: 1000.0
+    step: 0.001
+    mode: box
+    on_value:
+      - script.execute: publish_meta
+
+text:
+  # Anlagen-ID = Sensor-ID im Dashboard und in den MQTT-Topics.
+  # Leer lassen -> MAC-basierte ID (gas-<MAC-Suffix>). Eine Aenderung raeumt
+  # die alten retained Topics ab und startet das Geraet neu (LWT/Birth lassen
+  # sich nur beim Verbinden setzen). Erlaubt: A-Za-z0-9_- (Rest wird entfernt).
+  - platform: template
+    name: "Anlagen-ID"
+    id: machine_id_cfg
+    entity_category: config
+    icon: "mdi:identifier"
+    mode: text
+    optimistic: true
+    restore_value: true
+    initial_value: ""
+    on_value:
+      # booted-Guard: beim NVS-Restore im Boot nicht neu starten
+      - if:
+          condition:
+            lambda: return id(booted);
+          then:
+            - script.execute: apply_machine_id
+
+script:
+  # Geraete-Metadaten als retained JSON: das Dashboard zeigt daraus IP-Link,
+  # SP-Wert, Hostname und Firmware im Sensor-Manager.
+  - id: publish_meta
+    mode: restart
+    then:
+      - lambda: |-
+          if (!mqtt::global_mqtt_client->is_connected())
+            return;
+          std::string ip;
+          for (auto &addr : network::get_ip_addresses()) {
+            if (addr.is_set() && addr.is_ip4()) { ip = addr.str(); break; }
+          }
+          std::string payload = "{\"ip\":\"" + ip +
+              "\",\"mac\":\"" + get_mac_address_pretty() +
+              "\",\"hostname\":\"" + App.get_name() +
+              "\",\"sp\":" + str_sprintf("%.3f", id(sp_value).state) +
+              ",\"fw\":\"" ESPHOME_VERSION " (" + App.get_compilation_time() + ")\"}";
+          mqtt::global_mqtt_client->publish(
+              gas_topic(id(machine_id_cfg).state, "meta"), payload, 0, true);
+
+  # Geaenderte Anlagen-ID uebernehmen: alte retained Topics abraeumen, NVS
+  # syncen, Neustart. mode: restart -> beim Tippen zaehlt nur die letzte Eingabe.
+  - id: apply_machine_id
+    mode: restart
+    then:
+      - delay: 2s
+      - lambda: |-
+          if (gas_machine_id(id(machine_id_cfg).state) == id(active_id))
+            return;
+          if (mqtt::global_mqtt_client->is_connected()) {
+            // Leere retained Publishes loeschen die alten Topics beim Broker
+            // (das Backend ignoriert leere Payloads).
+            for (const char *leaf : {"status", "flow", "total", "voltage", "uptime", "meta"}) {
+              mqtt::global_mqtt_client->publish(
+                  "iwb/gas/" + id(active_id) + "/" + leaf, "", 0, true);
+            }
+          }
+          global_preferences->sync();
+      - delay: 1s
+      - lambda: |-
+          if (gas_machine_id(id(machine_id_cfg).state) != id(active_id)) {
+            ESP_LOGI("gas", "Anlagen-ID geaendert -> Neustart mit neuer ID");
+            App.safe_reboot();
+          }
+
+interval:
+  - interval: 60s
+    then:
+      - script.execute: publish_meta
 
 # ----------------------------------------------------------------------------
 #  Zaehlerlogik
 #  vol_total  : lebenslanges Gesamtvolumen, ueberlebt Reboot/Stromausfall
 #               (restore_value -> Flash/NVS, von ESPHome periodisch gesichert)
-#  last_raw   : Spiegel des fluechtigen pulse_meter-Totals (NICHT persistent);
-#               wird bei jedem Boot wie das pulse_meter-Total auf 0 gesetzt.
+#  last_raw   : Spiegel des fluechtigen pulse_meter-Totals in ROHEN Pulsen
+#               (NICHT persistent); wird bei jedem Boot wie das
+#               pulse_meter-Total auf 0 gesetzt.
 # ----------------------------------------------------------------------------
 globals:
   - id: vol_total
@@ -164,11 +289,21 @@ globals:
     type: uint32_t
     restore_value: false
     initial_value: "0"
+  # true ab on_boot Prio 600 — unterscheidet NVS-Restore von echten Eingaben
+  - id: booted
+    type: bool
+    restore_value: false
+    initial_value: "false"
+  # beim Boot fixierte, aktive Anlagen-ID (Topics/LWT laufen darauf)
+  - id: active_id
+    type: std::string
+    restore_value: false
+    initial_value: '""'
 
 sensor:
   # ---- Momentaner Durchfluss --------------------------------------------------
   # pulse_meter misst die Zeit zwischen Pulsen und meldet standardmaessig
-  # "Pulse/min". x liter_per_pulse  ->  Nl/min.
+  # "Pulse/min". x SP-Wert  ->  Nl/min.
   - platform: pulse_meter
     pin:
       number: ${pulse_pin}
@@ -177,7 +312,6 @@ sensor:
         pullup: true        # zusaetzlich externer Pull-up empfohlen (NPN braucht >=2 mA Last)
     name: "Durchfluss"
     id: gas_flow
-    state_topic: "iwb/gas/${machine_id}/flow"
     unit_of_measurement: "Nl/min"
     device_class: volume_flow_rate
     state_class: measurement
@@ -190,30 +324,33 @@ sensor:
     internal_filter_mode: PULSE
     timeout: ${flow_timeout}
     filters:
-      - multiply: ${liter_per_pulse}
-    # Das fluechtige Sitzungs-Total (Pulse seit Boot) nutzen wir nur intern,
-    # um daraus das persistente Gesamtvolumen zu bilden.
+      - lambda: return x * id(sp_value).state;
+    on_value:
+      - lambda: |-
+          mqtt::global_mqtt_client->publish(
+              gas_topic(id(machine_id_cfg).state, "flow"), str_sprintf("%.2f", x), 0, true);
+    # Das fluechtige Sitzungs-Total nutzen wir nur intern, um daraus das
+    # persistente Gesamtvolumen zu bilden. Bewusst UNSKALIERT (rohe Pulse):
+    # erst das Delta wird mit dem aktuellen SP-Wert bewertet — eine
+    # SP-Aenderung wirkt so nur auf kuenftige Pulse, nicht rueckwirkend.
     total:
-      name: "Volumen (Sitzung)"
-      id: session_vol
-      unit_of_measurement: "Nl"
-      accuracy_decimals: 1
+      name: "Pulse (roh, Sitzung)"
+      id: session_pulses
+      unit_of_measurement: "Pulse"
+      accuracy_decimals: 0
       icon: "mdi:counter"
       internal: true
-      filters:
-        - multiply: ${liter_per_pulse}
       on_value:
         - lambda: |-
-            // x ist bereits das mit liter_per_pulse skalierte Sitzungsvolumen.
             float delta = x - id(last_raw);
             if (delta < 0) delta = x;   // Schutz, falls pulse_meter intern resettet
             id(last_raw) = x;
-            id(vol_total) += delta;
             // Beim Boot publiziert pulse_meter einmal total=0 (kein echter Puls).
-            // Debug-Zaehler/Live-Puls-Anzeige nur bei echtem Volumenzuwachs anstossen.
+            // Volumen/Debug-Zaehler nur bei echtem Pulszuwachs anstossen.
             if (delta > 0) {
+              id(vol_total) += delta * id(sp_value).state;
               id(last_pulse_ms) = millis();
-              id(pulse_count) += 1;
+              id(pulse_count) += (uint32_t) lroundf(delta);
             }
         - component.update: total_vol
 
@@ -221,33 +358,42 @@ sensor:
   - platform: template
     name: "Gesamtvolumen"
     id: total_vol
-    state_topic: "iwb/gas/${machine_id}/total"
     unit_of_measurement: "Nl"
     state_class: total_increasing
     accuracy_decimals: 1
     icon: "mdi:sigma"
     lambda: "return id(vol_total);"
     update_interval: 5s
+    on_value:
+      - lambda: |-
+          mqtt::global_mqtt_client->publish(
+              gas_topic(id(machine_id_cfg).state, "total"), str_sprintf("%.1f", x), 0, true);
 
   # ---- Diagnose: Betriebsspannung am EXT-Anschluss (GPI39, Teiler 47k/100k) ---
   - platform: adc
     pin: GPIO39
     name: "Versorgungsspannung (Sense)"
-    state_topic: "iwb/gas/${machine_id}/voltage"
     attenuation: 12db
     update_interval: 60s
     entity_category: diagnostic
     filters:
       # R2=47k / R8=100k -> Vin = Vadc * (47+100)/100 = Vadc * 1.47
       - multiply: 1.47
+    on_value:
+      - lambda: |-
+          mqtt::global_mqtt_client->publish(
+              gas_topic(id(machine_id_cfg).state, "voltage"), str_sprintf("%.2f", x), 0, true);
 
   - platform: uptime
     name: "Uptime"
-    state_topic: "iwb/gas/${machine_id}/uptime"
     entity_category: diagnostic
+    on_value:
+      - lambda: |-
+          mqtt::global_mqtt_client->publish(
+              gas_topic(id(machine_id_cfg).state, "uptime"), str_sprintf("%.0f", x), 0, true);
 
-  # ---- Debug: Live-Pulszähler (im Web-Dashboard hochzählen sehen) -------------
-  # Zum Verdrahtungs-/Sensortest: Sensor auslösen -> Zähler steigt.
+  # ---- Debug: Live-Pulszaehler (im Web-Dashboard hochzaehlen sehen) -----------
+  # Zum Verdrahtungs-/Sensortest: Sensor ausloesen -> Zaehler steigt.
   - platform: template
     name: "Pulse (Sitzung)"
     id: puls_count_sensor
@@ -258,14 +404,35 @@ sensor:
     lambda: "return id(pulse_count);"
     update_interval: 1s
 
-# Online/Offline-Verfügbarkeit kommt aus dem retained LWT-Topic .../status
-# (birth_message / will_message oben) – kein zusätzlicher status-binary_sensor nötig.
+# ----------------------------------------------------------------------------
+#  Status-/Identitaets-Anzeige im Geraete-Webinterface
+# ----------------------------------------------------------------------------
+text_sensor:
+  - platform: ethernet_info
+    ip_address:
+      name: "IP-Adresse"
+    mac_address:
+      name: "MAC-Adresse (Ethernet)"
+  - platform: version
+    name: "Firmware"
+    hide_timestamp: true
+  # Effektive ID inkl. MAC-Fallback — das ist die ID, unter der das Geraet
+  # im Dashboard und in den MQTT-Topics erscheint.
+  - platform: template
+    name: "Anlagen-ID (aktiv)"
+    entity_category: diagnostic
+    icon: "mdi:identifier"
+    lambda: return gas_machine_id(id(machine_id_cfg).state);
+    update_interval: 10s
+
+# Online/Offline-Verfuegbarkeit kommt aus dem retained LWT-Topic .../status
+# (Birth/Will werden in on_boot auf die Laufzeit-Topics gesetzt).
 
 # ----------------------------------------------------------------------------
 #  Live-Anzeige des Puls-Eingangs im eingebauten Web-Dashboard (Debug).
 #  "Puls-Eingang aktiv" leuchtet, solange Pulse eintreffen (letzter Puls < 400 ms).
 #  Getrieben aus den echten Puls-Events – pulse_meter belegt GPIO4 exklusiv, daher
-#  keine zweite GPIO-Belegung auf demselben Pin möglich.
+#  keine zweite GPIO-Belegung auf demselben Pin moeglich.
 # ----------------------------------------------------------------------------
 binary_sensor:
   - platform: template
@@ -276,7 +443,7 @@ binary_sensor:
       return id(last_pulse_ms) != 0 && (millis() - id(last_pulse_ms)) < 400;
 
 button:
-  # Reset auch ueber API/ESPHome-Dashboard/Home Assistant moeglich
+  # Reset auch ueber Webinterface/API/ESPHome-Dashboard/Home Assistant moeglich
   - platform: template
     name: "Gesamtvolumen zuruecksetzen"
     icon: "mdi:restart"

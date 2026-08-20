@@ -17,22 +17,26 @@ wird im Dashboard zugeordnet.
 
 1. **Sensor** parametrieren (Anleitung, Abschnitt 4): NPN, **Pin4 = VOL/MASS**, SP notieren,
    GAS = Ar bzw. N2.
-2. **Firmware**: Gerätedatei `firmware/devices/gas-flow-NN.yaml` ist die Konfiguration
-   der Messstelle — SP dort als `liter_per_pulse` eintragen → `esphome run`.
-   Geräte publizieren `iwb/gas/<machine_id>/{flow,total,voltage,status}` (das Backend
-   versteht zusätzlich das Legacy-Schema `iwb/argon/<id>/…` der Bestands-Firmware).
+2. **Firmware**: `firmware/gas-flowmeter.yaml` ist **die eine Firmware für alle Geräte**
+   → `esphome run gas-flowmeter.yaml`. Jedes Gerät bekommt über seine MAC einen
+   eindeutigen Hostnamen (`gas-flow-<MAC-Suffix>`) und per DHCP eine eindeutige IP.
+   **SP-Wert** und **Anlagen-ID** werden danach im Geräte-Webinterface `http://<IP>/`
+   eingestellt (kein Neu-Flashen bei SP-Änderungen). Geräte publizieren
+   `iwb/gas/<anlagen-id>/{flow,total,voltage,status,meta}` (das Backend versteht
+   zusätzlich das Legacy-Schema `iwb/argon/<id>/…` der Bestands-Firmware).
 3. **Dashboard**: `cd dashboard/backend && python app.py` → http://127.0.0.1:8000.
-   Neue Geräte erscheinen als „nicht zugeordnet“ und werden **im Dashboard** benannt und
-   Gas/Abteilung zugewiesen (Sensoren-Button); Broker/Preise/Alarm-Schwellen über ⚙.
+   Neue Geräte erscheinen als „nicht zugeordnet“ (inkl. Link auf ihr Webinterface) und
+   werden **im Dashboard** benannt und Gas/Abteilung zugewiesen (Sensoren-Button);
+   Broker/Preise/Alarm-Schwellen über ⚙.
 
 ## Status
 
 - ✅ Aufbauanleitung erstellt (gegen Festo-SFAH- und Olimex-POE2-Datenblätter verifiziert).
-- ✅ ESPHome-Firmware erstellt, gas-neutral (`iwb/gas/`-Topics); Konfiguration je Gerät
-  direkt in `devices/gas-flow-NN.yaml` (kein Generator-Skript mehr).
-  Ethernet-Config gegen offizielles Olimex-Beispiel verifiziert; erstes Gerät läuft am
-  eingebetteten Broker (noch alte `argon-flow-01`-Firmware → Legacy-Ingest greift; beim
-  nächsten OTA-Update wechselt es aufs neutrale Schema, siehe `firmware/README.md`).
+- ✅ ESPHome-Firmware, gas-neutral (`iwb/gas/`-Topics): **eine Einheits-Firmware für
+  alle Geräte** — Identität aus der MAC, SP-Wert/Anlagen-ID zur Laufzeit über das
+  Geräte-Webinterface (NVS-persistent, kein Neu-Flashen bei SP-Änderungen).
+  Ethernet-Config gegen offizielles Olimex-Beispiel verifiziert; erstes Gerät läuft
+  am eingebetteten Broker (Migration siehe `firmware/README.md`).
 - ✅ Dashboard: Ingest für beide Topic-Schemata (`iwb/gas/` neu, `iwb/argon/` Bestand),
   Sensor-Manager + ⚙-Einstellungen komplett im Frontend.
 - ⏳ Offen pro Anlage: SFAH-Variante/Max-Durchfluss → SP, Normbedingung, reale

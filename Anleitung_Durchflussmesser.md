@@ -139,11 +139,11 @@ Das `Puls`-Menü ersetzt das `OutA`-Menü, sobald `Pin4 / bin` auf `VOL/MASS` st
 
 1. **[Edit]** drücken → mit **[A]/[B]** **`Puls`** wählen → **[Edit]**.
 2. **`SP`** blinkt (mit Volumeneinheit) = Normvolumen je Puls. Mit [A]/[B] einstellen und
-   **exakt notieren** → geht 1:1 in `liter_per_pulse` der Gerätedatei ein.
+   **exakt notieren** → geht 1:1 als **SP-Wert** ins Geräte-Webinterface des ESP32 ein
+   (`http://<Geräte-IP>/`, Feld „SP-Wert (Nl pro Puls)“).
    Dimensionierung: `SP ≥ Q_max[Nl/min] / 300` (Pulse dürfen nicht verschmelzen; bei
    75–100 ms Breite konservativ mit 300 Pulsen/min rechnen). Unser Standard: **`SP = 1 Nl`**
-   (= Vorgabe `liter_per_pulse: "1.0"` in den Gerätedateien); Beispiel SFAH-50 mit
-   feinerer Auflösung: `SP = 0,2 Nl`.
+   (= Firmware-Vorgabe 1.0); Beispiel SFAH-50 mit feinerer Auflösung: `SP = 0,2 Nl`.
 3. **[Edit]** → **`PULS`**: laut Handbuch 20–995 ms (Werk 100 ms), das Gerät bietet aber
    nur diskrete Schritte an — an unseren Sensoren ist **75 ms** der passende wählbare
    Wert. **75 ms so einstellen** — kompatibel mit der ESP32-Firmware (der 30-ms-Störfilter
@@ -183,10 +183,13 @@ Voraussetzungen, Setup, Erst-Flash (USB) und OTA-Updates: siehe **`firmware/READ
 
 Kurz:
 1. `pip install esphome`, `secrets.yaml` aus Vorlage anlegen.
-2. Gerätedatei `firmware/devices/gas-flow-NN.yaml` anpassen: `liter_per_pulse` =
-   notierter **SP**-Wert (jede Gerätedatei ist die Konfiguration ihrer Messstelle).
-3. **PoE abziehen**, per USB-C: `esphome run devices/gas-flow-01.yaml`.
-4. USB trennen, PoE anschließen — Betrieb startet, OTA ab jetzt über Ethernet.
+2. **PoE abziehen**, per USB-C: `esphome run gas-flowmeter.yaml` — **eine Firmware für
+   alle Geräte**, keine Gerätedatei nötig.
+3. USB trennen, PoE anschließen — das Gerät bekommt per DHCP eine IP (an seiner
+   eindeutigen MAC; im Router reservieren) und erscheint im Dashboard als
+   „nicht zugeordnet“ (mit IP-Link).
+4. Im **Geräte-Webinterface** `http://<IP>/` einstellen: **SP-Wert** = notierter
+   **SP** vom Festo-Sensor, optional **Anlagen-ID**. OTA ab jetzt über Ethernet.
 
 > ⚠️ **USB und PoE niemals gleichzeitig** — Board/PC-Schaden (Board nicht isoliert).
 
@@ -194,7 +197,8 @@ Kurz:
 
 ## 6. MQTT-Schnittstelle
 
-Topic-Präfix je Anlage: `iwb/gas/<machine_id>` (Bestandsgeräte mit alter Firmware:
+Topic-Präfix je Anlage: `iwb/gas/<anlagen-id>` (Anlagen-ID aus dem Geräte-Webinterface,
+ohne Konfiguration `gas-<MAC-Suffix>`; Bestandsgeräte mit alter Firmware:
 `iwb/argon/<machine_id>` — das Backend versteht beide).
 
 | Topic | Richtung | Inhalt |
@@ -203,6 +207,7 @@ Topic-Präfix je Anlage: `iwb/gas/<machine_id>` (Bestandsgeräte mit alter Firmw
 | `.../flow` | Publish | Durchfluss [Nl/min] |
 | `.../total` | Publish | persistentes Gesamtvolumen [Nl] |
 | `.../voltage` | Publish | Diagnose-Spannung [V] |
+| `.../meta` | Publish (retained) | JSON `{ip, mac, hostname, sp, fw}` |
 | `.../cmd` | Subscribe | `reset` → Gesamtvolumen = 0 |
 
 (Volumen je Zeitfenster – Tag/Woche/Monat – werden im Dashboard/Backend gebildet, nicht im Gerät.)
@@ -214,7 +219,7 @@ Topic-Präfix je Anlage: `iwb/gas/<machine_id>` (Bestandsgeräte mit alter Firmw
 - [ ] Jumper auf **24 V**
 - [ ] Festo: **NPN** / **Pin4 = VOL/MASS** / **LOGC = NO** / **PULS = 75 ms** / **SP = 1 Nl** gesetzt & notiert (Display zeigt oben `Puls`)
 - [ ] Festo: **GAS = Ar bzw. N2** (passend zur Anlage), **REF/Cond** hallenweit einheitlich
-- [ ] `liter_per_pulse` in `devices/gas-flow-NN.yaml` = notierter SP-Wert
+- [ ] **SP-Wert im Geräte-Webinterface** (`http://<IP>/`) = notierter SP-Wert vom Sensor
 - [ ] Schutzbeschaltung **inkl. 1 kΩ Pull-up** an GPIO4
 - [ ] isolierte **PoE+**-Quelle, Switch-Leistungsbudget für 16× geprüft
 - [ ] Ethernet kommt hoch (Firmware: clk GPIO0/CLK_OUT) → `status = online`

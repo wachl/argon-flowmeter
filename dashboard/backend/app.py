@@ -14,6 +14,7 @@ Firmware; beide werden ingestiert und auf dieselbe Sensor-ID gemappt):
     iwb/gas/<id>/flow                Nl/min   (Momentandurchfluss)
     iwb/gas/<id>/total               Nl       (monoton, persistent)
     iwb/gas/<id>/voltage             V        (Diagnose)
+    iwb/gas/<id>/meta     retained   JSON {ip, mac, hostname, sp, fw} (Einheits-Firmware)
     iwb/gas/<id>/cmd     <-          "reset"  (Gesamtzähler des Geräts nullen)
 
 Start:
@@ -175,8 +176,12 @@ def init_db() -> None:
         c.execute(
             "CREATE TABLE IF NOT EXISTS live ("
             " machine TEXT PRIMARY KEY, flow REAL, total REAL,"
-            " voltage REAL, status TEXT, updated INTEGER)"
+            " voltage REAL, status TEXT, updated INTEGER, meta TEXT)"
         )
+        # Migration: meta-Spalte (Geräte-Metadaten der Einheits-Firmware) nachrüsten
+        cols = [r[1] for r in c.execute("PRAGMA table_info(live)")]
+        if "meta" not in cols:
+            c.execute("ALTER TABLE live ADD COLUMN meta TEXT")
         c.execute(
             "CREATE TABLE IF NOT EXISTS alarms ("
             " id INTEGER PRIMARY KEY AUTOINCREMENT, sensor TEXT, gas TEXT, type TEXT,"
@@ -322,6 +327,14 @@ def on_message(client, userdata, msg):
         update_live(sid, total=value)
         if prev is not None and value >= prev:      # value < prev => Geräte-Reset
             add_consumption(sid, value - prev, time.time())
+    elif leaf == "meta":
+        # Geräte-Metadaten der Einheits-Firmware (retained JSON):
+        # {ip, mac, hostname, sp, fw} -> IP-Link + SP-Anzeige im Sensor-Manager
+        try:
+            if isinstance(json.loads(payload), dict):
+                update_live(sid, meta=payload)
+        except ValueError:
+            pass
 
 
 # Laufzeit-Status für das Dashboard (read-only via /api/config).
@@ -445,13 +458,24 @@ def read_hourly(sensor: str, since_ts: int) -> dict[int, float]:
 def read_live() -> dict[str, dict]:
     with db() as c:
         rows = c.execute(
-            "SELECT machine, flow, total, voltage, status, updated FROM live"
+            "SELECT machine, flow, total, voltage, status, updated, meta FROM live"
         ).fetchall()
     out = {}
-    for sensor, flow, total, voltage, status, updated in rows:
+    for sensor, flow, total, voltage, status, updated, meta in rows:
         out[sensor] = dict(flow=flow, total=total, voltage=voltage,
-                           status=status, updated=updated)
+                           status=status, updated=updated, meta=meta)
     return out
+
+
+def parse_meta(raw: str | None) -> dict:
+    """Geräte-Metadaten (JSON-String aus live.meta) tolerant parsen."""
+    if not raw:
+        return {}
+    try:
+        m = json.loads(raw)
+    except ValueError:
+        return {}
+    return m if isinstance(m, dict) else {}
 
 
 def _parse_hhmm(s: str) -> tuple[int, int]:
@@ -559,9 +583,11 @@ def build_payload() -> dict:
         total = round(float(lv.get("total") or 0.0), 1)
 
         if not s.get("gas"):
+            meta = parse_meta(lv.get("meta"))
             unassigned.append({"id": sid, "name": s.get("name", sid),
                                "status": status, "flow": round(flow, 2), "total": total,
-                               "lastSeen": lv.get("updated")})
+                               "lastSeen": lv.get("updated"),
+                               "ip": meta.get("ip"), "hostname": meta.get("hostname")})
             continue
 
         evaluate_sensor_alarms(s, daily, flow, status, now, now_ts)
@@ -657,6 +683,8 @@ def api_get_sensors():
             "flow": round(float(lv.get("flow") or 0.0), 2) if fresh else 0.0,
             "total": round(float(lv.get("total") or 0.0), 1),
             "lastSeen": lv.get("updated"),
+            # Geräte-Metadaten der Einheits-Firmware ({} bei Bestands-Firmware)
+            "meta": parse_meta(lv.get("meta")),
         })
     return {"sensors": out, "departments": DEPARTMENTS, "gases": CONFIG.get("gases", {}),
             "defaults": {"leak": default_leak(), "downtime": default_downtime()}}

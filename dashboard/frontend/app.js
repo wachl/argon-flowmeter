@@ -467,7 +467,7 @@
           <span style="width:8px;height:8px;border-radius:50%;background:${dot};flex:none;${s.online?'animation:argpulse 2.2s ease-in-out infinite':''}"></span>
           <span style="font-size:12.5px;font-weight:600;color:var(--text);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(s.name)}</span>
           <span style="font-size:10.5px;font-family:var(--fontnum);color:var(--mute);flex:none">${esc(s.id)}</span></span>
-        <span style="display:block;font-size:11px;color:var(--dim);margin-top:3px">${tag} · ${s.online?'online':'offline'} · ${esc(ago(s.lastSeen))}</span>
+        <span style="display:block;font-size:11px;color:var(--dim);margin-top:3px">${tag} · ${s.online?'online':'offline'} · ${esc(ago(s.lastSeen))}${s.meta&&s.meta.ip?` · <span style="font-family:var(--fontnum)">${esc(s.meta.ip)}</span>`:''}</span>
       </button>`;
     }).join('');
     const deptChips=(reg.departments||[]).map(d=>`<span style="display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);background:var(--panel2);border-radius:20px;padding:4px 6px 4px 11px;font-size:11.5px;color:var(--text)">${esc(d.name)}
@@ -492,12 +492,25 @@
     const deptOpts=['<option value="">— keine Abteilung —</option>']
       .concat((reg.departments||[]).map(d=>`<option value="${esc(d.id)}" ${e.dept===d.id?'selected':''}>${esc(d.name)}</option>`)).join('');
     const s=reg.sensors.find(x=>x.id===e.id)||{};
+    const meta=s.meta||{};
+    // Geräte-Infos aus dem meta-Topic der Einheits-Firmware (Bestands-Firmware: leer)
+    const devBox=(meta.ip||meta.sp!=null||meta.hostname)?`
+      <div style="border:1px solid var(--border);border-radius:9px;padding:10px 13px;display:flex;flex-wrap:wrap;gap:5px 16px;align-items:baseline;font-size:12px;color:var(--dim)">
+        <span style="font-size:12.5px;font-weight:700;color:var(--text)">Gerät</span>
+        ${meta.ip?`<a href="http://${esc(meta.ip)}/" target="_blank" rel="noopener" title="Geräte-Webinterface öffnen" style="color:var(--accent2);font-family:var(--fontnum);font-weight:600;text-decoration:none">${esc(meta.ip)} ↗</a>`:''}
+        ${meta.sp!=null?`<span>SP-Wert <b style="color:var(--text);font-family:var(--fontnum)">${esc(fmtNum(meta.sp,3))} Nl/Puls</b></span>`:''}
+        ${meta.hostname?`<span style="font-family:var(--fontnum)">${esc(meta.hostname)}</span>`:''}
+        ${meta.mac?`<span style="font-family:var(--fontnum)">${esc(meta.mac)}</span>`:''}
+        ${meta.fw?`<span>FW ${esc(meta.fw)}</span>`:''}
+        <span style="flex-basis:100%;font-size:11px;color:var(--mute)">SP-Wert (= Festo-SP, Nl/Puls) und Anlagen-ID stellst du im Geräte-Webinterface ein — Link oben, kein Neu-Flashen nötig.</span>
+      </div>`:'';
     return `<div style="display:flex;flex-direction:column;gap:15px">
       <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
         <span style="font-size:14px;font-weight:700;color:var(--text)">${esc(e.id)}</span>
         <span style="font-size:11.5px;color:${s.online?'var(--good)':'var(--mute)'};font-weight:600">${s.online?'● online':'○ offline'}</span>
         <span style="font-size:11.5px;font-family:var(--fontnum);color:var(--dim)">Total ${esc(fmtNum(s.total,1))} Nl · Flow ${esc(fmtNum(s.flow,2))} Nl/min · ${esc(ago(s.lastSeen))}</span>
       </div>
+      ${devBox}
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
         <div style="grid-column:1/-1"><span style="${LBL}">Anzeigename</span><input id="f-name" value="${esc(e.name)}" style="${INP}"></div>
         <div><span style="${LBL}">Gas</span><select id="f-gas" style="${INP}">${gasOpts}</select></div>
