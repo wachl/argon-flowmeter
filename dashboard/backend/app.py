@@ -296,6 +296,12 @@ def on_message(client, userdata, msg):
     if not payload:
         return                            # leere Nachrichten (retained-Loeschungen)
     if sid not in SENSORS:                # neuer Sensor -> unassigned anlegen
+        # Aber nicht aus alten retained-Resten (z. B. geloeschte Geist-IDs nach
+        # einer Anlagen-ID-Aenderung): Registrierung nur durch Live-Nachrichten
+        # (retain-Flag setzt der Broker nur bei Zustellung aus dem Retained-Store)
+        # oder ein retained "online" (Birth-Message eines laufenden Geraets).
+        if msg.retain and not (leaf == "status" and payload == "online"):
+            return
         SENSORS[sid] = {"id": sid, "name": sid, "gas": None, "dept": None}
         save_sensors()
 
