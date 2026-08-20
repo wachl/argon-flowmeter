@@ -242,16 +242,26 @@ script:
       - lambda: |-
           if (gas_machine_id(id(machine_id_cfg).state) == id(active_id))
             return;
+          // LWT/Shutdown-Message zeigen noch auf das alte Status-Topic und
+          // wuerden es beim Reboot als retained "offline" wieder anlegen ->
+          // vor dem Abraeumen deaktivieren (on_boot setzt sie nach dem
+          // Neustart frisch auf die neue ID).
+          mqtt::global_mqtt_client->disable_last_will();
+          mqtt::global_mqtt_client->disable_shutdown_message();
           if (mqtt::global_mqtt_client->is_connected()) {
             // Leere retained Publishes loeschen die alten Topics beim Broker
-            // (das Backend ignoriert leere Payloads).
+            // (das Backend ignoriert leere Payloads). WICHTIG: Payload als
+            // std::string uebergeben - ein ""-Literal wuerde die
+            // (payload, payload_length, qos, retain)-Ueberladung treffen und
+            // retain=false senden (loescht nichts).
             for (const char *leaf : {"status", "flow", "total", "voltage", "uptime", "meta"}) {
               mqtt::global_mqtt_client->publish(
-                  "iwb/gas/" + id(active_id) + "/" + leaf, "", 0, true);
+                  "iwb/gas/" + id(active_id) + "/" + leaf, std::string(), 0, true);
             }
           }
           global_preferences->sync();
-      - delay: 1s
+      # Publishes sicher rausschreiben lassen, dann neu starten
+      - delay: 3s
       - lambda: |-
           if (gas_machine_id(id(machine_id_cfg).state) != id(active_id)) {
             ESP_LOGI("gas", "Anlagen-ID geaendert -> Neustart mit neuer ID");
