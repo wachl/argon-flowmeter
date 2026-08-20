@@ -25,8 +25,6 @@ wird im Dashboard zugeordnet.
    Neue Geräte erscheinen als „nicht zugeordnet“ und werden **im Dashboard** benannt und
    Gas/Abteilung zugewiesen (Sensoren-Button); Broker/Preise/Alarm-Schwellen über ⚙.
 
-Demo ohne Hardware: `cd dashboard/backend && python sim.py --seed 30 && python app.py`.
-
 ## Status
 
 - ✅ Aufbauanleitung erstellt (gegen Festo-SFAH- und Olimex-POE2-Datenblätter verifiziert).

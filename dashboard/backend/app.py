@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import threading
 import time
@@ -70,11 +71,17 @@ def load_sensors() -> None:
         SENSORS[s["id"]] = s
 
 
+def _write_json(path: Path, payload) -> None:
+    """Atomar schreiben (tmp + rename), damit ein Absturz keine halbe Datei hinterlässt."""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    tmp.replace(path)
+
+
 def save_sensors() -> None:
     payload = {"departments": DEPARTMENTS, "sensors": list(SENSORS.values())}
     with _lock:
-        SENSORS_FILE.write_text(
-            json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        _write_json(SENSORS_FILE, payload)
 
 
 def dept_name(dept_id: str | None) -> str:
@@ -265,6 +272,11 @@ def active_alarms() -> list[dict]:
 # ------------------------------------------------------------------------- MQTT
 _mqtt_client = None
 
+# Nur wohlgeformte Sensor-IDs registrieren: schuetzt Registry und Frontend vor
+# kaputten/fremden Topics (MQTT-Topic-Level duerfen fast beliebige Zeichen enthalten).
+_SID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_legacy_purged: set[str] = set()
+
 
 def on_message(client, userdata, msg):
     parts = msg.topic.split("/")          # iwb / gas|argon / <id> / <leaf>
@@ -273,13 +285,23 @@ def on_message(client, userdata, msg):
     sid, leaf = parts[2], parts[3]
     if leaf == "cmd":
         return                            # eigene Kommandos ignorieren
+    if not _SID_RE.match(sid):
+        return
+    payload = msg.payload.decode("utf-8", "ignore").strip()
+    if not payload:
+        return                            # leere Nachrichten (retained-Loeschungen)
     if sid not in SENSORS:                # neuer Sensor -> unassigned anlegen
         SENSORS[sid] = {"id": sid, "name": sid, "gas": None, "dept": None}
         save_sensors()
-    payload = msg.payload.decode("utf-8", "ignore").strip()
 
     if leaf == "status":
         update_live(sid, status=payload)
+        # Geraet publiziert auf dem neuen Praefix -> veraltetes retained-Status-Flag
+        # unter iwb/argon/ einmalig loeschen. Sonst liefert der Broker es bei jedem
+        # Backend-Neustart erneut aus und meldet ein offline-Geraet als "online".
+        if parts[1] == "gas" and sid not in _legacy_purged:
+            _legacy_purged.add(sid)
+            client.publish(f"iwb/argon/{sid}/status", payload=None, retain=True)
     elif leaf == "flow":
         try:
             update_live(sid, flow=float(payload))
@@ -368,12 +390,20 @@ def start_mqtt() -> None:
               "(pip install paho-mqtt für Live-Telemetrie).")
         return
 
-    client = mqtt.Client(client_id="gas-backend", clean_session=True)
+    # paho-mqtt 2.x verlangt die Callback-API-Version als erstes Argument;
+    # unsere Callback-Signaturen sind mit VERSION2 und 1.x kompatibel.
+    try:
+        client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2,
+                             client_id="gas-backend", clean_session=True)
+    except AttributeError:                             # paho-mqtt 1.x
+        client = mqtt.Client(client_id="gas-backend", clean_session=True)
     if m.get("username"):
         client.username_pw_set(m["username"], m.get("password", ""))
 
     def _on_connect(c, userdata, flags, rc, properties=None):
-        _broker_state["ingest_connected"] = (rc == 0)
+        # rc: int (paho 1.x) oder ReasonCode (2.x)
+        ok = (not rc.is_failure) if hasattr(rc, "is_failure") else (rc == 0)
+        _broker_state["ingest_connected"] = ok
         print(f"[mqtt] Ingest verbunden mit {host}:{port} (rc={rc}), "
               "abonniere iwb/gas/# + iwb/argon/#")
         c.subscribe([("iwb/gas/#", 0), ("iwb/argon/#", 0)])
@@ -395,7 +425,7 @@ def publish_reset(sensor_id: str) -> bool:
 
     Auf beiden Topic-Schemata, damit auch Bestands-Firmware (iwb/argon/) reagiert.
     """
-    if _mqtt_client is None:
+    if _mqtt_client is None or not _mqtt_client.is_connected():
         return False
     _mqtt_client.publish(f"iwb/gas/{sensor_id}/cmd", "reset")
     _mqtt_client.publish(f"iwb/argon/{sensor_id}/cmd", "reset")
@@ -458,9 +488,13 @@ def downtime_window_volume(sensor: str, start_dt: datetime) -> float:
 
 
 def over_consumption(daily: list[float]):
-    """Mehrverbrauch: Mittel der letzten 7 Tage vs. der 21 Tage davor."""
-    recent = daily[-7:]
-    base = daily[-28:-7]
+    """Mehrverbrauch: Mittel der letzten 7 vollen Tage vs. der 21 Tage davor.
+
+    Der laufende (unvollstaendige) heutige Tag bleibt aussen vor — er wuerde den
+    Mittelwert der letzten Woche sonst tageszeitabhaengig nach unten druecken.
+    """
+    recent = daily[-8:-1]
+    base = daily[-29:-8]
     if base and sum(base) > 0 and sum(recent) > 0:
         mean_recent = sum(recent) / len(recent)
         mean_base = sum(base) / len(base)
@@ -508,7 +542,7 @@ def build_payload() -> dict:
     stale = CONFIG.get("stale_seconds", 120)
 
     sensors_out, unassigned = [], []
-    for s in SENSORS.values():
+    for s in list(SENSORS.values()):      # Snapshot: Registry kann parallel mutieren
         sid = s["id"]
         buckets = read_hourly(sid, earliest)
         daily = [
@@ -570,6 +604,21 @@ def build_payload() -> dict:
     }
 
 
+def _alarm_loop() -> None:
+    """Alarme minuetlich auswerten, auch wenn niemand das Dashboard offen hat.
+
+    build_payload() prueft alle Sensor-Alarme als Seiteneffekt. Ohne diesen Loop
+    wuerden fenstergebundene Alarme (Downtime nachts, Leck am Wochenende) nur
+    erfasst, solange ein Browser /api/data pollt.
+    """
+    while True:
+        time.sleep(60)
+        try:
+            build_payload()
+        except Exception as exc:                       # noqa: BLE001
+            print(f"[alarms] Auswertung fehlgeschlagen: {exc}")
+
+
 # --------------------------------------------------------------------------- API
 app = FastAPI(title="Gas Monitoring Backend")
 
@@ -597,7 +646,7 @@ def api_get_sensors():
     now_ts = int(time.time())
     stale = CONFIG.get("stale_seconds", 120)
     out = []
-    for s in SENSORS.values():
+    for s in list(SENSORS.values()):
         lv = live.get(s["id"], {})
         fresh = lv.get("updated") and (now_ts - lv["updated"] <= stale)
         out.append({
@@ -686,12 +735,21 @@ async def api_departments(req: Request):
     name = str(body.get("name", "")).strip()
     if not name:
         return JSONResponse({"ok": False, "error": "name required"}, status_code=400)
-    did = body.get("id") or name.lower().replace(" ", "-")
-    for d in DEPARTMENTS:
-        if d["id"] == did:
-            d["name"] = name
-            save_sensors()
-            return {"ok": True, "id": did}
+    if body.get("id"):                     # explizite ID -> Umbenennen
+        did = str(body["id"])
+        for d in DEPARTMENTS:
+            if d["id"] == did:
+                d["name"] = name
+                save_sensors()
+                return {"ok": True, "id": did}
+        return JSONResponse({"ok": False, "error": "unknown dept"}, status_code=404)
+    # Neu anlegen: ID als sauberer Slug, bei Kollision durchnummerieren
+    # (sonst wuerde eine Namensdopplung stillschweigend die bestehende Abteilung umbenennen)
+    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "abteilung"
+    did, n = slug, 2
+    while any(d["id"] == did for d in DEPARTMENTS):
+        did = f"{slug}-{n}"
+        n += 1
     DEPARTMENTS.append({"id": did, "name": name})
     save_sensors()
     return {"ok": True, "id": did}
@@ -787,8 +845,7 @@ async def api_set_config(req: Request):
     except (TypeError, ValueError) as exc:
         return JSONResponse({"ok": False, "error": f"bad value: {exc}"}, status_code=400)
 
-    (BASE / "config.json").write_text(
-        json.dumps(CONFIG, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    _write_json(BASE / "config.json", CONFIG)
     return {"ok": True, "restart_required": restart}
 
 
@@ -801,5 +858,6 @@ if __name__ == "__main__":
     _migrate_legacy_db()
     init_db()
     start_mqtt()
+    threading.Thread(target=_alarm_loop, daemon=True).start()
     port = int(os.environ.get("PORT", CONFIG.get("port", 8000)))
     uvicorn.run(app, host=CONFIG.get("host", "0.0.0.0"), port=port)

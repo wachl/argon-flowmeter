@@ -184,7 +184,7 @@
     const deptRows=deptAgg.map(({d,nl})=>{
       const dm=flat.filter(m=>m.deptId===d.id); if(!dm.length) return '';
       const active=S.scope.type==='dept'&&S.scope.id===d.id; const hasAl=dm.some(m=>m.anomaly);
-      return `<button data-action="scope-dept" data-id="${d.id}" style="text-align:left;border:none;background:${active?'var(--panel2)':'transparent'};border-radius:7px;padding:6px 8px;margin:-6px -8px;cursor:pointer;width:calc(100% + 16px)">
+      return `<button data-action="scope-dept" data-id="${esc(d.id)}" style="text-align:left;border:none;background:${active?'var(--panel2)':'transparent'};border-radius:7px;padding:6px 8px;margin:-6px -8px;cursor:pointer;width:calc(100% + 16px)">
         <span style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:6px">
           <span style="font-size:12.5px;font-weight:600;color:${active?'var(--accent)':'var(--text)'}">${esc(d.name)}</span>
           <span style="font-size:12px;font-family:var(--fontnum);font-weight:600;color:var(--text)">${esc(fmtUnitVal(nl))}</span></span>
@@ -196,7 +196,7 @@
       const color=levelColor(a.level);
       return `<div style="display:flex;gap:11px;align-items:stretch;background:var(--panel2);border:1px solid var(--border);border-radius:9px;padding:10px 11px">
         <span style="width:3px;border-radius:3px;background:${color};flex:none"></span>
-        <button data-action="scope-machine" data-id="${a.sensor}" style="flex:1;min-width:0;text-align:left;background:none;border:none;cursor:pointer;padding:0;color:inherit">
+        <button data-action="scope-machine" data-id="${esc(a.sensor)}" style="flex:1;min-width:0;text-align:left;background:none;border:none;cursor:pointer;padding:0;color:inherit">
           <span style="display:flex;align-items:center;justify-content:space-between;gap:8px">
             <span style="font-size:12.5px;font-weight:600;color:var(--text)">${esc(meta.title)}</span>
             <span style="font-size:11px;font-family:var(--fontnum);font-weight:600;color:${color};flex:none">${esc(meta.val(a.value))}</span></span>
@@ -224,7 +224,7 @@
       + `<th style="padding:7px 6px;border-bottom:1px solid var(--border)"></th>`;
     const trs=rows.map(r=>{ const m=r.m; const active=S.scope.type==='machine'&&S.scope.id===m.id;
       const anim=r.an?'argblink 1.4s ease-in-out infinite':(r.cur>0.3?'argpulse 2.2s ease-in-out infinite':'none');
-      return `<tr data-action="scope-machine" data-id="${m.id}" style="cursor:pointer;background:${active?'var(--panel2)':'transparent'};border-bottom:1px solid var(--border)">
+      return `<tr data-action="scope-machine" data-id="${esc(m.id)}" style="cursor:pointer;background:${active?'var(--panel2)':'transparent'};border-bottom:1px solid var(--border)">
         <td style="padding:11px 12px;white-space:nowrap"><span style="display:inline-flex;align-items:center;gap:7px;font-size:11px;font-weight:600;font-family:var(--fontnum);color:${r.statusColor}"><span style="width:8px;height:8px;border-radius:50%;background:${r.statusColor};animation:${anim}"></span>${esc(r.statusLabel)}</span></td>
         <td style="padding:11px 12px;font-size:13px;font-weight:600;color:var(--text);white-space:nowrap">${esc(m.name)}</td>
         <td style="padding:11px 12px;font-size:12px;color:var(--dim);white-space:nowrap">${esc(gasShort(m.gas))}</td>
@@ -234,7 +234,7 @@
         <td style="padding:11px 12px;text-align:right;font-family:var(--fontnum);font-size:12.5px;color:var(--dim);white-space:nowrap">${esc(fmtEurNl(r.consNl,m.gas))}</td>
         <td style="padding:11px 12px;text-align:right;font-family:var(--fontnum);font-size:12.5px;font-weight:600;color:${r.tr>0.5?'var(--danger)':r.tr<-0.5?'var(--good)':'var(--mute)'};white-space:nowrap">${r.tr>=0?'▲ ':'▼ '}${esc(Math.abs(r.tr).toFixed(0))}%</td>
         <td style="padding:9px 12px;text-align:right">${sparkSVG(m.daily.slice(16),r.statusColor)}</td>
-        <td style="padding:9px 6px;text-align:center"><button data-action="open-sensors" data-id="${m.id}" title="Sensor konfigurieren" style="border:1px solid var(--border);background:var(--panel2);color:var(--dim);border-radius:6px;padding:4px 8px;font-size:12px;cursor:pointer">✎</button></td></tr>`;
+        <td style="padding:9px 6px;text-align:center"><button data-action="open-sensors" data-id="${esc(m.id)}" title="Sensor konfigurieren" style="border:1px solid var(--border);background:var(--panel2);color:var(--dim);border-radius:6px;padding:4px 8px;font-size:12px;cursor:pointer">✎</button></td></tr>`;
     }).join('');
 
     const d=new Date(S.now);

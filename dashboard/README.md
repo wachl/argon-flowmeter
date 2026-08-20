@@ -19,48 +19,37 @@ und startet ihn standardmäßig auf `0.0.0.0:1883` (anonym). Ein separater Mosqu
 damit nicht nötig — die ESPHome-Geräte verbinden sich direkt mit der LAN-IP des
 Dashboard-PCs.
 
+> Bekannte amqtt-Eigenheit (getestet mit 0.11.3): retained Messages werden bei
+> jedem Subscribe an **alle** neuen Subscriptions ausgeliefert, auch wenn das
+> Topic nicht passt. Für dieses System harmlos (Backend abonniert per Wildcard,
+> die Firmware filtert Topics selbst) — beim Debuggen mit `mosquitto_sub` aber
+> nicht wundern.
+
 ```
 dashboard/
 ├─ backend/
 │  ├─ app.py            FastAPI-Server: eingebetteter Broker + MQTT-Ingest + REST-API + Frontend
 │  ├─ config.json       Broker (eingebettet/extern), Port, Preise €/m³, Standard-Schwellwerte
 │  ├─ sensors.json      Sensor-Registry (id → Name, Gas, Abteilung, Regeln) – wird vom Dashboard gepflegt
-│  ├─ machines.json     nur Demo: Anlagenliste für sim.py
-│  ├─ sim.py            Demo: Historie seeden (--seed) + Live-Telemetrie publizieren
 │  └─ requirements.txt
 └─ frontend/
    ├─ index.html
    └─ app.js            gesamte Dashboard-Logik (vanilla JS, kein Build)
 ```
 
-## Schnellstart – Demo ohne Hardware/Broker
+## Start
 
 ```bash
 cd dashboard/backend
 pip install -r requirements.txt          # fastapi, uvicorn, paho-mqtt, amqtt
-python sim.py --seed 30                   # Demo-Registry + 30 Tage synthetische Historie
-python app.py                             # Broker :1883 + Server auf http://127.0.0.1:8000
+python app.py                            # Broker :1883 + Server auf http://127.0.0.1:8000
 ```
-→ Browser auf **http://127.0.0.1:8000** → der Verbrauchs-Trend ist sofort gefüllt.
-*Live Flow* ist 0, solange kein Gerät/Sim sendet.
+→ Browser auf **http://127.0.0.1:8000**. Alle Daten kommen von den echten Geräten;
+ohne verbundene Geräte bleiben Trend und Live-Werte leer.
 
 > **Windows:** `127.0.0.1` statt `localhost` verwenden — uvicorn bindet nur IPv4.
 > Ohne `amqtt` startet das Backend trotzdem (eingebetteter Broker aus → externen Broker
 > in ⚙/`config.json` eintragen). Ohne `paho-mqtt` läuft nur die DB-Auslieferung.
-
-### Live-Werte simulieren (zusätzlich)
-
-```bash
-python sim.py                  # publiziert flow/total/status für alle 16 Demo-Anlagen alle 3 s
-python sim.py --ids anlage-01  # nur einzelne Sensoren
-```
-
-### Demo-Daten wieder loswerden
-
-```bash
-python sim.py --clear     # leert DB (hourly/live/alarms); entfernt die Demo-Registry,
-                          # sofern sensors.json nicht angepasst wurde
-```
 
 ## Echtbetrieb
 
@@ -74,8 +63,9 @@ python sim.py --clear     # leert DB (hourly/live/alarms); entfernt die Demo-Reg
    pro Sensor direkt am Sensor.
 
 > **Update von älteren Installationen:** Die Datenbank heißt jetzt `gas.db`
-> (vorher `argon.db`). Beim ersten Start von `app.py` bzw. `sim.py` wird eine
-> vorhandene `argon.db` automatisch umbenannt — Historie bleibt erhalten.
+> (vorher `argon.db`). Beim ersten Start von `app.py` wird eine vorhandene
+> `argon.db` automatisch umbenannt — Historie bleibt erhalten. Sollen alte
+> (z. B. simulierte) Daten komplett weg: Backend stoppen und `gas.db` löschen.
 
 ## MQTT-Vertrag
 
@@ -115,8 +105,10 @@ gas-neutrale Firmware noch nicht bekommen haben — das Backend versteht beides.
   behandelt (kein negativer Verbrauch).
 - Tag/Woche/Monat = Summen der Stundenbuckets. Der letzte Total überlebt einen Neustart
   des Backends (wird aus `live` geladen).
-- **Alarme** (Standard in ⚙, pro Sensor überschreibbar):
-  - *Mehrverbrauch*: Mittel der letzten 7 Tage vs. der 21 Tage davor (> 15 % Warnung, > 30 % kritisch).
+- **Alarme** (Standard in ⚙, pro Sensor überschreibbar) werden minütlich im Backend
+  ausgewertet — auch wenn gerade kein Dashboard offen ist:
+  - *Mehrverbrauch*: Mittel der letzten 7 vollen Tage (ohne den laufenden Tag)
+    vs. der 21 Tage davor (> 15 % Warnung, > 30 % kritisch).
   - *Leerlauf/Leck*: Anlage online, Durchfluss zwischen `leak.min` und `leak.active` Nl/min.
   - *Downtime*: Verbrauch innerhalb definierter Stillstands-Fenster über `max_nl`.
 

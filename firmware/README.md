@@ -124,6 +124,8 @@ esphome run --no-logs devices/gas-flow-01.yaml --device <GERÄTE-IP>
 - Der **persistente Gesamtzähler bleibt erhalten**: er hängt an der internen
   Global-ID `vol_total` (unverändert), nicht am Gerätenamen; OTA lässt den
   NVS-Speicher unangetastet.
+- Das veraltete retained-Status-Flag unter `iwb/argon/<id>/status` räumt das
+  Dashboard-Backend automatisch ab, sobald das Gerät auf `iwb/gas/` publiziert.
 
 ## MQTT-Schnittstelle (pro Anlage)
 
