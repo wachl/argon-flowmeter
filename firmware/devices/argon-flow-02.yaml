@@ -1,9 +1,0 @@
-# Auto-generiert von gen_devices.py – manuelle Änderungen ggf. überschrieben.
-substitutions:
-  device_name: "argon-flow-02"
-  friendly_name: "Argon Flow 02 – Anlage 02"
-  machine_id: "anlage-02"
-  liter_per_pulse: "1.0"
-
-packages:
-  common: !include ../argon-flowmeter.yaml

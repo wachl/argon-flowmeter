@@ -73,6 +73,10 @@ python sim.py --clear     # leert DB (hourly/live/alarms); entfernt die Demo-Reg
 4. Preise, Offline-Schwelle und Standard-Alarmregeln in ⚙ setzen; abweichende Regeln
    pro Sensor direkt am Sensor.
 
+> **Update von älteren Installationen:** Die Datenbank heißt jetzt `gas.db`
+> (vorher `argon.db`). Beim ersten Start von `app.py` bzw. `sim.py` wird eine
+> vorhandene `argon.db` automatisch umbenannt — Historie bleibt erhalten.
+
 ## MQTT-Vertrag
 
 Das Backend abonniert **beide** Topic-Schemata und mappt sie auf dieselbe Sensor-ID:
@@ -85,8 +89,9 @@ Das Backend abonniert **beide** Topic-Schemata und mappt sie auf dieselbe Sensor
 | `…/<id>/voltage` | V (Diagnose) |
 | `…/<id>/cmd` ← | `reset` = Gesamtzähler des Geräts nullen (wird auf beiden Präfixen gesendet) |
 
-`iwb/argon/` ist das Präfix der Bestands-Firmware (`firmware/argon-flowmeter.yaml`);
-neue Firmware kann gas-neutral auf `iwb/gas/` publizieren — Backend versteht beides.
+`iwb/gas/` ist das Präfix der aktuellen Firmware (`firmware/gas-flowmeter.yaml`);
+`iwb/argon/` publizieren nur noch Bestandsgeräte, die ihr OTA-Update auf die
+gas-neutrale Firmware noch nicht bekommen haben — das Backend versteht beides.
 
 ## REST-API
 

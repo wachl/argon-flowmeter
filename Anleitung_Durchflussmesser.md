@@ -1,8 +1,8 @@
-# Argon-Durchflussmesser — Aufbauanleitung
+# Gas-Durchflussmesser (Argon / Stickstoff) — Aufbauanleitung
 
 **Olimex ESP32-POE2 + Festo SFAH | iwb / TUM**
 
-Erfassung des Argon-Verbrauchs über den **Volumenpuls-Ausgang** des Festo SFAH. Versorgung
+Erfassung des Gasverbrauchs (Argon oder Stickstoff) über den **Volumenpuls-Ausgang** des Festo SFAH. Versorgung
 und Datenanbindung aus einer einzigen Quelle (PoE). Der ESP32 (ESPHome) zählt die Pulse,
 berechnet Durchfluss und Gesamtvolumen und veröffentlicht sie via Ethernet/MQTT. Updates
 laufen nach dem ersten Flashen **per OTA über Ethernet**.
@@ -99,9 +99,11 @@ Bedienung über die drei Tasten ([A], [Edit], [B]). [Edit] startet den EDIT-Modu
      verschmelzen). Beispiel SFAH-50: `SP = 0,2 Nl`.
    - **`PULS`** = **100 ms**.
    - **`LOGC`** = **`NO`** (Schließer).
-4. **Gas:** Spec-Menü → **`GAS`** → **`Ar`** (Argon direkt wählbar).
+4. **Gas:** Spec-Menü → **`GAS`** → passend zum Gas der Anlage: **`Ar`** (Argon) oder
+   **`N2`** (Stickstoff). Die Firmware ist gas-neutral — die Gaswahl am Sensor sorgt nur
+   für die korrekte interne Umrechnung; die Zuordnung fürs Dashboard passiert dort.
 5. **Normbedingung:** **`REF / Cond`** bewusst wählen (DIN 1343 = 0 °C / ISO = 15 °C / 20 °C) und
-   **an allen 16 Sensoren gleich** setzen. Korrekturfaktor bis +8,7 %!
+   **an allen Sensoren gleich** setzen. Korrekturfaktor bis +8,7 %!
 6. EDIT-Modus verlassen — Werte werden gespeichert.
 
 > **Tipp – Parameter replizieren:** Einen Sensor vollständig einstellen, dann via Festo-
@@ -118,26 +120,26 @@ Voraussetzungen, Setup, Erst-Flash (USB) und OTA-Updates: siehe **`firmware/READ
 
 Kurz:
 1. `pip install esphome`, `secrets.yaml` aus Vorlage anlegen.
-2. SP-Werte je Anlage in `firmware/gen_devices.py` eintragen → `python gen_devices.py`.
-3. **PoE abziehen**, per USB-C: `esphome run devices/argon-flow-01.yaml`.
+2. Gerätedatei `firmware/devices/gas-flow-NN.yaml` anpassen: `liter_per_pulse` =
+   notierter **SP**-Wert (jede Gerätedatei ist die Konfiguration ihrer Messstelle).
+3. **PoE abziehen**, per USB-C: `esphome run devices/gas-flow-01.yaml`.
 4. USB trennen, PoE anschließen — Betrieb startet, OTA ab jetzt über Ethernet.
 
 > ⚠️ **USB und PoE niemals gleichzeitig** — Board/PC-Schaden (Board nicht isoliert).
-
-Pro Gerät anzupassen: `liter_per_pulse` = notierter **SP**-Wert.
 
 ---
 
 ## 6. MQTT-Schnittstelle
 
-Topic-Präfix je Anlage: `iwb/argon/<machine_id>`.
+Topic-Präfix je Anlage: `iwb/gas/<machine_id>` (Bestandsgeräte mit alter Firmware:
+`iwb/argon/<machine_id>` — das Backend versteht beide).
 
 | Topic | Richtung | Inhalt |
 |---|---|---|
 | `.../status` | Publish (retained, LWT) | `online` / `offline` |
-| `.../sensor/argon-durchfluss/state` | Publish | Durchfluss [Nl/min] |
-| `.../sensor/argon-gesamtvolumen/state` | Publish | persistentes Gesamtvolumen [Nl] |
-| `.../sensor/versorgungsspannung-sense/state` | Publish | Diagnose [V] |
+| `.../flow` | Publish | Durchfluss [Nl/min] |
+| `.../total` | Publish | persistentes Gesamtvolumen [Nl] |
+| `.../voltage` | Publish | Diagnose-Spannung [V] |
 | `.../cmd` | Subscribe | `reset` → Gesamtvolumen = 0 |
 
 (Volumen je Zeitfenster – Tag/Woche/Monat – werden im Dashboard/Backend gebildet, nicht im Gerät.)
@@ -148,8 +150,8 @@ Topic-Präfix je Anlage: `iwb/argon/<machine_id>`.
 
 - [ ] Jumper auf **24 V**
 - [ ] Festo: **NPN** / **Pin4 = VOL** / **LOGC = NO** / **PULS = 100 ms** / **SP** gesetzt & notiert
-- [ ] Festo: **GAS = Ar**, **REF/Cond** hallenweit einheitlich
-- [ ] `liter_per_pulse` = notierter SP-Wert
+- [ ] Festo: **GAS = Ar bzw. N2** (passend zur Anlage), **REF/Cond** hallenweit einheitlich
+- [ ] `liter_per_pulse` in `devices/gas-flow-NN.yaml` = notierter SP-Wert
 - [ ] Schutzbeschaltung **inkl. 1 kΩ Pull-up** an GPIO4
 - [ ] isolierte **PoE+**-Quelle, Switch-Leistungsbudget für 16× geprüft
 - [ ] Ethernet kommt hoch (Firmware: clk GPIO0/CLK_OUT) → `status = online`
@@ -162,7 +164,8 @@ Topic-Präfix je Anlage: `iwb/argon/<machine_id>`.
 
 - **Auflösung/Live-Durchfluss:** Pulsweg ist für **Volumen** ideal; der Momentan-Durchfluss ist
   bei kleinem Flow grob/träge. Für flüssigen Live-Wert: Analog-/IO-Link-Auswertung (nicht vorgesehen).
-- **Genauigkeit Argon:** Nullpunkt ±2 % FS, Spanne ±4 % FS; Einlaufstrecke nach Festo 6.1.1 beachten.
+- **Genauigkeit gasabhängig:** für Argon Nullpunkt ±2 % FS, Spanne ±4 % FS (verifiziert);
+  Werte für Stickstoff der SFAH-Genauigkeitstabelle entnehmen. Einlaufstrecke nach Festo 6.1.1 beachten.
 - **Schutzart IP40:** nur Innenraum/Schaltschrank; in rauer Halle Sensor/Elektronik schützen.
 - **Persistenz:** Gesamtvolumen in der Firmware via `restore_value` gesichert (übersteht Reboot).
 - **IO-Link-Alternative:** Direktzugriff auf kumulierten Messwert + Ferndiagnose über Pin 2 (C/Q)

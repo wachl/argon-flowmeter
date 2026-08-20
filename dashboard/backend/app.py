@@ -38,10 +38,20 @@ from fastapi.staticfiles import StaticFiles
 BASE = Path(__file__).parent
 CONFIG = json.loads((BASE / "config.json").read_text(encoding="utf-8"))
 SENSORS_FILE = BASE / "sensors.json"
-DB_PATH = BASE / CONFIG.get("db_file", "argon.db")
+DB_PATH = BASE / CONFIG.get("db_file", "gas.db")
 FRONTEND = BASE.parent / "frontend"
 
-GAS_ORDER = ("argon", "nitrogen")
+
+def _migrate_legacy_db() -> None:
+    """Alte argon.db (samt WAL/SHM) einmalig auf den neuen DB-Namen umziehen."""
+    legacy = BASE / "argon.db"
+    if DB_PATH.name == legacy.name or DB_PATH.exists() or not legacy.exists():
+        return
+    for suffix in ("", "-wal", "-shm"):
+        src = BASE / (legacy.name + suffix)
+        if src.exists():
+            src.rename(BASE / (DB_PATH.name + suffix))
+    print(f"[db] {legacy.name} -> {DB_PATH.name} migriert")
 
 _lock = threading.Lock()
 _last_total: dict[str, float] = {}             # sensor_id -> letzter Total-Wert (Nl)
@@ -539,10 +549,10 @@ def build_payload() -> dict:
         a = top.get(so["id"])
         so["anomaly"] = {"type": a["type"], "level": a["level"], "value": a["value"]} if a else None
 
-    gcfg = CONFIG.get("gases", {})
-    gases_out = [{"id": g, "name": gcfg.get(g, {}).get("name", g.title()),
-                  "pricePerM3": gcfg.get(g, {}).get("price_per_m3", 120)}
-                 for g in GAS_ORDER if g in gcfg]
+    # Gase komplett config-getrieben (Reihenfolge = Reihenfolge in config.json)
+    gases_out = [{"id": g, "name": gv.get("name", g.title()),
+                  "pricePerM3": gv.get("price_per_m3", 0)}
+                 for g, gv in CONFIG.get("gases", {}).items()]
 
     return {
         "now": int(now.timestamp() * 1000),
@@ -616,7 +626,7 @@ async def api_set_sensor(sid: str, req: Request):
         s["name"] = str(body["name"]).strip() or sid
     if "gas" in body:
         gas = body["gas"]
-        if gas not in (None, "argon", "nitrogen") and gas not in CONFIG.get("gases", {}):
+        if gas is not None and gas not in CONFIG.get("gases", {}):
             return JSONResponse({"ok": False, "error": "bad gas"}, status_code=400)
         s["gas"] = gas or None
     if "dept" in body:
@@ -788,6 +798,7 @@ app.mount("/", StaticFiles(directory=str(FRONTEND), html=True), name="frontend")
 
 if __name__ == "__main__":
     load_sensors()
+    _migrate_legacy_db()
     init_db()
     start_mqtt()
     port = int(os.environ.get("PORT", CONFIG.get("port", 8000)))

@@ -2,7 +2,7 @@
 #  DIAGNOSE-Firmware – nur die Ethernet-MAC-Adresse ausgeben (z. B. für
 #  Netzwerk-Freischaltung / DHCP-Reservierung). KEINE Mess-/MQTT-Funktion.
 #  Einmalig flashen, MAC ablesen, danach die richtige Firmware
-#  (devices/argon-flow-XX.yaml) aufspielen.
+#  (devices/gas-flow-XX.yaml) aufspielen.
 #
 #  Olimex ESP32-POE2. Selbst-enthaltend (keine secrets.yaml nötig).
 #  Flashen (USB):   esphome run diag-mac-address.yaml
@@ -16,7 +16,7 @@
 #      öffnen -> Textsensor "Ethernet MAC".
 # =============================================================================
 esphome:
-  name: argon-mac-diag
+  name: gas-mac-diag
   # Läuft vor dem Ethernet-Setup, gibt die MAC also auch ohne Kabel/DHCP aus.
   on_boot:
     then:

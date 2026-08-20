@@ -1,4 +1,4 @@
-"""Demo-Simulator für das Argon-Dashboard (ohne echte Hardware).
+"""Demo-Simulator für das Gas-Dashboard (ohne echte Hardware).
 
 Zwei Funktionen:
   python sim.py --seed [TAGE]   # schreibt synthetische Historie direkt in die DB
@@ -26,8 +26,18 @@ BASE = Path(__file__).parent
 CONFIG = json.loads((BASE / "config.json").read_text(encoding="utf-8"))
 _MACHINES_DATA = json.loads((BASE / "machines.json").read_text(encoding="utf-8"))
 MACHINES = _MACHINES_DATA["machines"]
-DB_PATH = BASE / CONFIG.get("db_file", "argon.db")
+DB_PATH = BASE / CONFIG.get("db_file", "gas.db")
 SENSORS_FILE = BASE / "sensors.json"
+
+# Alte argon.db (samt WAL/SHM) einmalig auf den neuen DB-Namen umziehen, bevor
+# irgendein Zugriff eine leere neue DB anlegt (gleiche Logik wie app.py).
+_legacy = BASE / "argon.db"
+if DB_PATH.name != _legacy.name and not DB_PATH.exists() and _legacy.exists():
+    for _suffix in ("", "-wal", "-shm"):
+        _src = BASE / (_legacy.name + _suffix)
+        if _src.exists():
+            _src.rename(BASE / (DB_PATH.name + _suffix))
+    print(f"[db] {_legacy.name} -> {DB_PATH.name} migriert")
 
 # Gas-Zuordnung der Demo-Anlagen (Produktion: Zuordnung im Dashboard)
 DEMO_GAS = {m["id"]: ("argon" if i < 7 else "nitrogen") for i, m in enumerate(MACHINES)}

@@ -2,7 +2,10 @@
 firmware/secrets.yaml
 firmware/.esphome/
 
-# Backend-Laufzeit
+# Backend-Laufzeit (gas.db aktuell, argon.db Alt-Name vor der Migration)
+dashboard/backend/gas.db
+dashboard/backend/gas.db-wal
+dashboard/backend/gas.db-shm
 dashboard/backend/argon.db
 dashboard/backend/argon.db-wal
 dashboard/backend/argon.db-shm

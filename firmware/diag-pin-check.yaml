@@ -1,7 +1,7 @@
 # =============================================================================
 #  DIAGNOSE-Firmware – nur GPIO4-Pegel prüfen (Verlötung/Verkabelung testen).
 #  KEINE Mess-/MQTT-Funktion. Einmalig flashen, High/Low ablesen, danach die
-#  richtige Firmware (devices/argon-flow-XX.yaml) aufspielen.
+#  richtige Firmware (devices/gas-flow-XX.yaml) aufspielen.
 #
 #  Olimex ESP32-POE2. Selbst-enthaltend (keine secrets.yaml nötig).
 #  Flashen (USB):   esphome run diag-pin-check.yaml
@@ -15,7 +15,7 @@
 #   - Sensor zieht (Puls aktiv)  -> gegen 0 V     -> LOW
 # =============================================================================
 esphome:
-  name: argon-pin-diag
+  name: gas-pin-diag
 
 esp32:
   board: esp32dev

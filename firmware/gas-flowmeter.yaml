@@ -1,10 +1,13 @@
 # =============================================================================
-#  Argon-Durchflussmesser  –  gemeinsames ESPHome-Package
+#  Gas-Durchflussmesser (Argon, Stickstoff, ...)  –  gemeinsames ESPHome-Package
 #  Olimex ESP32-POE2 (WROVER-E N4R8)  +  Festo SFAH (Volumenpuls-Ausgang)
 #  iwb / TUM
 #
+#  Die Firmware ist gas-neutral: WELCHES Gas eine Anlage verbraucht, wird erst
+#  im Dashboard zugeordnet (Sensor-Manager). Hier zaehlt nur der Volumenpuls.
+#
 #  Diese Datei wird NICHT direkt geflasht. Sie wird von den Geräte-Dateien
-#  unter  devices/argon-flow-XX.yaml  via  packages:  eingebunden.
+#  unter  devices/gas-flow-XX.yaml  via  packages:  eingebunden.
 #  Jede Geräte-Datei setzt nur ihre eigenen substitutions (Name, SP-Wert ...).
 #
 #  Verifizierte Hardware-Fakten (Stand Olimex-Handbuch Rev. 2.7 / Festo SFAH 2025-02d):
@@ -14,11 +17,11 @@
 #   - Pulssignal auf GPIO4 (= UEXT Pin 3 / EXT1 Pin 19), kein Onboard-Pullup
 # =============================================================================
 
-# ---- Vorgabewerte; werden je Gerät in devices/argon-flow-XX.yaml überschrieben
+# ---- Vorgabewerte; werden je Gerät in devices/gas-flow-XX.yaml überschrieben
 substitutions:
-  device_name: "argon-flow-xx"
-  friendly_name: "Argon Flow XX"
-  # machine_id geht in die MQTT-Topics ein:  iwb/argon/<machine_id>/...
+  device_name: "gas-flow-xx"
+  friendly_name: "Gas Flow XX"
+  # machine_id geht in die MQTT-Topics ein:  iwb/gas/<machine_id>/...
   machine_id: "anlage-xx"
   # Pulswertigkeit = der am Festo-SFAH eingestellte Schwellwert "SP"
   # (Normvolumen je Puls, Einheit Nl). MUSS exakt dem Sensor-SP entsprechen!
@@ -36,7 +39,7 @@ substitutions:
 esphome:
   name: ${device_name}
   friendly_name: ${friendly_name}
-  comment: "Argon-Durchflussmesser ${machine_id} (Olimex ESP32-POE2 + Festo SFAH)"
+  comment: "Gas-Durchflussmesser ${machine_id} (Olimex ESP32-POE2 + Festo SFAH)"
 
 esp32:
   board: esp32dev
@@ -99,39 +102,41 @@ time:
 
 # ----------------------------------------------------------------------------
 #  MQTT (fuer das kundenspezifische Dashboard / herstellerunabhaengige Anbindung)
-#  Topic-Praefix je Anlage. Status als retained LWT (online/offline).
+#  Topic-Praefix je Anlage, gas-neutral. Status als retained LWT (online/offline).
+#  (Bestandsgeraete mit alter Firmware publizierten auf iwb/argon/<machine_id>;
+#   das Dashboard-Backend versteht beide Praefixe und mappt auf dieselbe ID.)
 #  ESPHome veroeffentlicht jede Entität unter:
-#     iwb/argon/<machine_id>/sensor/<object_id>/state
-#  Kommandos (Reset) ueber:  iwb/argon/<machine_id>/cmd
+#     iwb/gas/<machine_id>/sensor/<object_id>/state
+#  Kommandos (Reset) ueber:  iwb/gas/<machine_id>/cmd
 # ----------------------------------------------------------------------------
 mqtt:
   broker: !secret mqtt_broker
   username: !secret mqtt_user
   password: !secret mqtt_password
-  topic_prefix: "iwb/argon/${machine_id}"
+  topic_prefix: "iwb/gas/${machine_id}"
   birth_message:
-    topic: "iwb/argon/${machine_id}/status"
+    topic: "iwb/gas/${machine_id}/status"
     payload: "online"
     retain: true
   will_message:
-    topic: "iwb/argon/${machine_id}/status"
+    topic: "iwb/gas/${machine_id}/status"
     payload: "offline"
     retain: true
   on_message:
     # Reset des persistenten Gesamtzaehlers per:  ...<machine_id>/cmd  ->  "reset"
-    - topic: "iwb/argon/${machine_id}/cmd"
+    - topic: "iwb/gas/${machine_id}/cmd"
       payload: "reset"
       then:
         # WICHTIG: auch das interne pulse_meter-Sitzungstotal nullen, sonst
         # addiert der naechste Puls das komplette Sitzungsvolumen wieder auf
         # (on_value: delta = x - last_raw mit last_raw = 0).
         - pulse_meter.set_total_pulses:
-            id: argon_flow
+            id: gas_flow
             value: 0
         - lambda: |-
             id(vol_total) = 0.0;
             id(last_raw) = 0.0;
-        - component.update: argon_total_vol
+        - component.update: total_vol
         - logger.log: "Gesamtvolumen via MQTT-Kommando zurueckgesetzt"
 
 # ----------------------------------------------------------------------------
@@ -170,9 +175,9 @@ sensor:
       mode:
         input: true
         pullup: true        # zusaetzlich externer Pull-up empfohlen (NPN braucht >=2 mA Last)
-    name: "Argon Durchfluss"
-    id: argon_flow
-    state_topic: "iwb/argon/${machine_id}/flow"
+    name: "Durchfluss"
+    id: gas_flow
+    state_topic: "iwb/gas/${machine_id}/flow"
     unit_of_measurement: "Nl/min"
     device_class: volume_flow_rate
     state_class: measurement
@@ -189,8 +194,8 @@ sensor:
     # Das fluechtige Sitzungs-Total (Pulse seit Boot) nutzen wir nur intern,
     # um daraus das persistente Gesamtvolumen zu bilden.
     total:
-      name: "Argon Volumen (Sitzung)"
-      id: argon_session_vol
+      name: "Volumen (Sitzung)"
+      id: session_vol
       unit_of_measurement: "Nl"
       accuracy_decimals: 1
       icon: "mdi:counter"
@@ -206,13 +211,13 @@ sensor:
             id(vol_total) += delta;
             id(last_pulse_ms) = millis();   // fuer Live-Puls-Anzeige (Web-Dashboard)
             id(pulse_count) += 1;
-        - component.update: argon_total_vol
+        - component.update: total_vol
 
   # ---- Persistentes Gesamtvolumen --------------------------------------------
   - platform: template
-    name: "Argon Gesamtvolumen"
-    id: argon_total_vol
-    state_topic: "iwb/argon/${machine_id}/total"
+    name: "Gesamtvolumen"
+    id: total_vol
+    state_topic: "iwb/gas/${machine_id}/total"
     unit_of_measurement: "Nl"
     state_class: total_increasing
     accuracy_decimals: 1
@@ -224,7 +229,7 @@ sensor:
   - platform: adc
     pin: GPIO39
     name: "Versorgungsspannung (Sense)"
-    state_topic: "iwb/argon/${machine_id}/voltage"
+    state_topic: "iwb/gas/${machine_id}/voltage"
     attenuation: 12db
     update_interval: 60s
     entity_category: diagnostic
@@ -234,7 +239,7 @@ sensor:
 
   - platform: uptime
     name: "Uptime"
-    state_topic: "iwb/argon/${machine_id}/uptime"
+    state_topic: "iwb/gas/${machine_id}/uptime"
     entity_category: diagnostic
 
   # ---- Debug: Live-Pulszähler (im Web-Dashboard hochzählen sehen) -------------
@@ -275,10 +280,10 @@ button:
     on_press:
       # wie beim MQTT-Reset: pulse_meter-Sitzungstotal mit nullen
       - pulse_meter.set_total_pulses:
-          id: argon_flow
+          id: gas_flow
           value: 0
       - lambda: |-
           id(vol_total) = 0.0;
           id(last_raw) = 0.0;
-      - component.update: argon_total_vol
+      - component.update: total_vol
       - logger.log: "Gesamtvolumen via Button zurueckgesetzt"

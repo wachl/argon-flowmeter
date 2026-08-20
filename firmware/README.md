@@ -1,17 +1,42 @@
-# ESPHome-Firmware – Argon-Durchflussmesser (16 Einheiten)
+# ESPHome-Firmware – Gas-Durchflussmesser (Argon, Stickstoff, ...)
 
 Olimex **ESP32-POE2** + Festo **SFAH** (Volumenpuls-Ausgang). PoE liefert Strom **und**
 Netzwerk; Strom-/Datenanbindung aus einer Quelle. Updates laufen nach dem ersten
-Flashen **per OTA über Ethernet** – kein USB-Stecken mehr an den 16 Geräten.
+Flashen **per OTA über Ethernet** – kein USB-Stecken mehr an den Geräten.
+
+Die Firmware ist **gas-neutral**: das Gerät zählt nur Volumenpulse. Welches Gas
+(Argon/Stickstoff) eine Anlage verbraucht, wird erst im Dashboard zugeordnet.
 
 ## Dateien
 
 | Datei | Zweck |
 |---|---|
-| `argon-flowmeter.yaml` | Gemeinsames Package (gesamte Logik). Wird nicht direkt geflasht. |
-| `devices/argon-flow-01.yaml` | Beispiel-Gerätedatei. Eine pro Anlage. |
-| `gen_devices.py` | Erzeugt alle 16 Gerätedateien aus einer Liste. |
+| `gas-flowmeter.yaml` | Gemeinsames Package (gesamte Logik). Wird nicht direkt geflasht. |
+| `devices/gas-flow-01.yaml` … `-16.yaml` | **Eine Datei pro Gerät = dessen Konfiguration.** Direkt editieren. |
+| `device-template.yaml` | Vorlage für zusätzliche Geräte (nach `devices/` kopieren). |
 | `secrets.yaml.example` | Vorlage → als `secrets.yaml` ablegen (Broker, Passwörter, API-Key). |
+
+## Konfiguration je Gerät
+
+Es gibt **keinen Generator** und keine zentrale Liste: die Gerätedatei unter
+`devices/` ist die einzige Quelle. Sie besteht nur aus vier `substitutions`:
+
+```yaml
+substitutions:
+  device_name: "gas-flow-01"                 # Hostname/OTA-Name, Schema gas-flow-NN
+  friendly_name: "Gas Flow 01 – Anlage 01"   # Anzeigename
+  machine_id: "anlage-01"                    # Sensor-ID im Dashboard + MQTT-Topics
+  liter_per_pulse: "1.0"                     # = Festo-SP (Nl/Puls) – MUSS exakt passen!
+```
+
+- **SP geändert am Sensor?** → `liter_per_pulse` in der Gerätedatei anpassen und
+  das Gerät per OTA neu flashen (s. u.). Git-Historie = Kalibrier-Historie.
+- **Neues Gerät?** → `cp device-template.yaml devices/gas-flow-17.yaml`, Nummer/SP
+  anpassen, flashen. Es meldet sich im Dashboard automatisch als „nicht zugeordnet“
+  und bekommt dort Name, Gas und Abteilung.
+
+> Der `liter_per_pulse`-Wert **muss exakt** dem am jeweiligen Festo-SFAH eingestellten
+> Schwellwert **SP** entsprechen. Siehe `../Anleitung_Durchflussmesser.md`, Abschnitt 4.
 
 ## Setup
 
@@ -25,12 +50,7 @@ Flashen **per OTA über Ethernet** – kein USB-Stecken mehr an den 16 Geräten.
    # mqtt_broker / Passwörter eintragen; API-Key erzeugen:
    openssl rand -base64 32
    ```
-3. **Geräte definieren:** SP-Werte (Nl/Puls) je Anlage in `gen_devices.py` eintragen, dann
-   ```bash
-   python gen_devices.py
-   ```
-   > Der `liter_per_pulse`-Wert **muss exakt** dem am jeweiligen Festo-SFAH eingestellten
-   > Schwellwert **SP** entsprechen. Siehe `../Anleitung_Argon_Durchflussmesser.md`, Abschnitt 4.
+3. **Gerätedatei prüfen/anpassen** (`devices/gas-flow-NN.yaml`, s. o.).
 
 ## Erstes Flashen (einmalig, per USB)
 
@@ -38,9 +58,9 @@ Flashen **per OTA über Ethernet** – kein USB-Stecken mehr an den 16 Geräten.
 > isoliert – USB **und** PoE gleichzeitig zerstört Board/PC (Olimex-Handbuch).
 
 ```bash
-esphome run devices/argon-flow-01.yaml
+esphome run devices/gas-flow-01.yaml
 ```
-USB trennen → PoE anschließen → Gerät meldet sich am Broker (`iwb/argon/anlage-01/status = online`).
+USB trennen → PoE anschließen → Gerät meldet sich am Broker (`iwb/gas/anlage-01/status = online`).
 
 ## Bench-Test ohne PoE
 
@@ -76,7 +96,7 @@ Step-down-Modul 24 V→5 V auf EXT1 Pin 5/GND. Kein USB, kein PoE, alles auf gem
 ## Updates danach (OTA, kein USB)
 
 ```bash
-esphome run devices/argon-flow-07.yaml   # baut + lädt über Ethernet hoch
+esphome run devices/gas-flow-07.yaml     # baut + lädt über Ethernet hoch
 # oder alle:
 for f in devices/*.yaml; do esphome run --no-logs "$f"; done
 ```
@@ -86,19 +106,41 @@ Optional ein **ESPHome-Dashboard** als Verwaltungsoberfläche (OTA-Buttons, Live
 esphome dashboard .
 ```
 
+## Migration von Bestandsgeräten (alte `argon-flow-XX`-Firmware)
+
+Geräte mit der alten Firmware publizieren auf `iwb/argon/<machine_id>` – das
+Dashboard-Backend versteht dieses Legacy-Präfix weiterhin, ein Update ist also
+**nicht dringend**. Beim nächsten OTA-Update wechselt das Gerät automatisch auf
+das neutrale Schema:
+
+```bash
+esphome run --no-logs devices/gas-flow-01.yaml --device <GERÄTE-IP>
+```
+
+- `--device <IP>` verwenden: der mDNS-Name ändert sich durch das Update von
+  `argon-flow-NN.local` auf `gas-flow-NN.local`.
+- Die `machine_id` bleibt gleich → das Dashboard führt Historie und Zuordnung
+  nahtlos weiter (beide Topic-Präfixe landen auf derselben Sensor-ID).
+- Der **persistente Gesamtzähler bleibt erhalten**: er hängt an der internen
+  Global-ID `vol_total` (unverändert), nicht am Gerätenamen; OTA lässt den
+  NVS-Speicher unangetastet.
+
 ## MQTT-Schnittstelle (pro Anlage)
 
-Topic-Präfix: `iwb/argon/<machine_id>` (z. B. `iwb/argon/anlage-01`).
-Das Dashboard-Backend abonniert dieses Präfix **und** das gas-neutrale `iwb/gas/<id>` —
-Bestandsgeräte brauchen für das Dashboard also kein Firmware-Update.
+Topic-Präfix: `iwb/gas/<machine_id>` (z. B. `iwb/gas/anlage-01`).
+Bestands-Firmware nutzt `iwb/argon/<machine_id>` – das Backend abonniert beides.
 
 | Topic | Richtung | Inhalt |
 |---|---|---|
 | `.../status` | Publish (retained, LWT) | `online` / `offline` |
-| `.../sensor/argon-durchfluss/state` | Publish | momentaner Durchfluss [Nl/min] |
-| `.../sensor/argon-gesamtvolumen/state` | Publish | persistentes Gesamtvolumen [Nl] |
-| `.../sensor/versorgungsspannung-sense/state` | Publish | Diagnose-Spannung [V] |
+| `.../flow` | Publish | momentaner Durchfluss [Nl/min] |
+| `.../total` | Publish | persistentes Gesamtvolumen [Nl] |
+| `.../voltage` | Publish | Diagnose-Spannung [V] |
+| `.../uptime` | Publish | Uptime [s] (Diagnose) |
 | `.../cmd` | Subscribe | `reset` → setzt Gesamtvolumen auf 0 |
+
+(Zusätzlich publiziert ESPHome die Entitäten unter `.../sensor/<object_id>/state`;
+das Dashboard nutzt nur die kurzen Topics oben.)
 
 Reset auch über Button (`Gesamtvolumen zurücksetzen`) im ESPHome-Dashboard / Home Assistant.
 

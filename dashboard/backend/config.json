@@ -1,7 +1,7 @@
 {
   "host": "0.0.0.0",
   "port": 8000,
-  "db_file": "argon.db",
+  "db_file": "gas.db",
   "stale_seconds": 120,
   "gases": {
     "argon": { "name": "Argon", "price_per_m3": 120 },
@@ -24,7 +24,7 @@
     "port": 1883,
     "allow_anonymous": true,
     "broker": "127.0.0.1",
-    "username": "argon",
+    "username": "gas",
     "password": "CHANGE_ME"
   }
 }
