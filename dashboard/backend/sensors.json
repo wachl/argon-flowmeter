@@ -1,4 +1,16 @@
 {
-  "departments": [],
-  "sensors": []
+  "departments": [
+    {
+      "id": "bp",
+      "name": "BP"
+    }
+  ],
+  "sensors": [
+    {
+      "id": "anlage-01",
+      "name": "anlage-01",
+      "gas": "argon",
+      "dept": "bp"
+    }
+  ]
 }
