@@ -1,42 +1,30 @@
 # ESPHome-Firmware – Gas-Durchflussmesser (Argon, Stickstoff, ...)
 
 Olimex **ESP32-POE2** + Festo **SFAH** (Volumenpuls-Ausgang). PoE liefert Strom **und**
-Netzwerk; Strom-/Datenanbindung aus einer Quelle. Updates laufen nach dem ersten
-Flashen **per OTA über Ethernet** – kein USB-Stecken mehr an den Geräten.
+Netzwerk. Updates laufen nach dem ersten Flashen **per OTA über Ethernet**.
 
-Die Firmware ist **gas-neutral**: das Gerät zählt nur Volumenpulse. Welches Gas
+Es gibt **eine Firmware für alle Geräte** — keine Geräte-Dateien, keine einkompilierten
+Kennwerte. Identität und Konfiguration entstehen zur Laufzeit:
+
+| Was | Woher |
+|---|---|
+| Hostname | `gas-flow-<MAC-Suffix>` (eindeutig je Gerät, aus der MAC) |
+| IP-Adresse | DHCP vergibt sie an die eindeutige MAC → im Router **reservieren** = stabile IP |
+| **Anlagen-ID** | Geräte-Webinterface `http://<IP>/` (Standard: `gas-<MAC-Suffix>`) |
+| **SP-Wert** (Nl/Puls) | Geräte-Webinterface — muss exakt dem Festo-SP entsprechen (Standard: 1.0) |
+
+Anlagen-ID und SP-Wert liegen im NVS-Flash des Geräts und überleben Reboot,
+Stromausfall und OTA-Updates. Die Firmware ist **gas-neutral**: welches Gas
 (Argon/Stickstoff) eine Anlage verbraucht, wird erst im Dashboard zugeordnet.
 
 ## Dateien
 
 | Datei | Zweck |
 |---|---|
-| `gas-flowmeter.yaml` | Gemeinsames Package (gesamte Logik). Wird nicht direkt geflasht. |
-| `devices/gas-flow-01.yaml` … `-16.yaml` | **Eine Datei pro Gerät = dessen Konfiguration.** Direkt editieren. |
-| `device-template.yaml` | Vorlage für zusätzliche Geräte (nach `devices/` kopieren). |
+| `gas-flowmeter.yaml` | **Die** Firmware. Wird direkt geflasht (alle Geräte identisch). |
+| `gas_id.h` | C++-Helfer (Anlagen-ID/Topics zur Laufzeit), wird von der YAML eingebunden. |
 | `secrets.yaml.example` | Vorlage → als `secrets.yaml` ablegen (Broker, Passwörter, API-Key). |
-
-## Konfiguration je Gerät
-
-Es gibt **keinen Generator** und keine zentrale Liste: die Gerätedatei unter
-`devices/` ist die einzige Quelle. Sie besteht nur aus vier `substitutions`:
-
-```yaml
-substitutions:
-  device_name: "gas-flow-01"                 # Hostname/OTA-Name, Schema gas-flow-NN
-  friendly_name: "Gas Flow 01 – Anlage 01"   # Anzeigename
-  machine_id: "anlage-01"                    # Sensor-ID im Dashboard + MQTT-Topics
-  liter_per_pulse: "1.0"                     # = Festo-SP (Nl/Puls) – MUSS exakt passen!
-```
-
-- **SP geändert am Sensor?** → `liter_per_pulse` in der Gerätedatei anpassen und
-  das Gerät per OTA neu flashen (s. u.). Git-Historie = Kalibrier-Historie.
-- **Neues Gerät?** → `cp device-template.yaml devices/gas-flow-17.yaml`, Nummer/SP
-  anpassen, flashen. Es meldet sich im Dashboard automatisch als „nicht zugeordnet“
-  und bekommt dort Name, Gas und Abteilung.
-
-> Der `liter_per_pulse`-Wert **muss exakt** dem am jeweiligen Festo-SFAH eingestellten
-> Schwellwert **SP** entsprechen. Siehe `../Anleitung_Durchflussmesser.md`, Abschnitt 4.
+| `diag-*.yaml` | Diagnose-Firmwares (MAC auslesen, Pin-Test). |
 
 ## Setup
 
@@ -50,17 +38,37 @@ substitutions:
    # mqtt_broker / Passwörter eintragen; API-Key erzeugen:
    openssl rand -base64 32
    ```
-3. **Gerätedatei prüfen/anpassen** (`devices/gas-flow-NN.yaml`, s. o.).
 
-## Erstes Flashen (einmalig, per USB)
+## Neues Gerät in Betrieb nehmen
 
 > ⚠️ **PoE-Kabel abziehen, solange USB steckt.** Der ESP32-POE2 ist nicht galvanisch
 > isoliert – USB **und** PoE gleichzeitig zerstört Board/PC (Olimex-Handbuch).
 
-```bash
-esphome run devices/gas-flow-01.yaml
-```
-USB trennen → PoE anschließen → Gerät meldet sich am Broker (`iwb/gas/anlage-01/status = online`).
+1. **Flashen (einmalig per USB):**
+   ```bash
+   esphome run gas-flowmeter.yaml
+   ```
+2. USB trennen → PoE anschließen. Das Gerät holt sich per DHCP eine IP und meldet
+   sich am Broker als `gas-<MAC-Suffix>` → erscheint im Dashboard automatisch als
+   **„nicht zugeordnet“** (inkl. seiner IP im Sensor-Manager).
+3. **Geräte-Webinterface öffnen** — `http://<IP>/` (Link im Sensor-Manager) oder
+   `http://gas-flow-<MAC-Suffix>.local/` — und einstellen:
+   - **SP-Wert (Nl pro Puls)** = der am Festo-SFAH eingestellte Schwellwert **SP**
+     (Anleitung, Abschnitt 4). Wirkt sofort, kein Neustart nötig.
+   - **Anlagen-ID** (optional, z. B. `anlage-17`) = Sensor-ID im Dashboard und in
+     den MQTT-Topics. Leer = MAC-basierte ID. Eine Änderung räumt die alten
+     retained Topics ab und startet das Gerät mit der neuen ID neu.
+4. **Im Dashboard** (Sensoren-Button): Name, Gas und Abteilung zuweisen.
+5. Empfohlen: **DHCP-Reservierung** für die MAC im Router anlegen, damit die IP
+   (und damit der Webinterface-Link) stabil bleibt.
+
+Das Webinterface zeigt außerdem den Live-Status: Durchfluss, Gesamtvolumen,
+Puls-Eingang (Debug-Zähler), IP/MAC, aktive Anlagen-ID, Versorgungsspannung, Uptime.
+
+- **SP am Sensor geändert?** → im Geräte-Webinterface den SP-Wert nachziehen.
+  **Kein Neu-Flashen mehr.** (Wirkt nur auf künftige Pulse, nicht rückwirkend.)
+- **Gerät ersetzt?** → neues Gerät flashen, im Webinterface die alte Anlagen-ID
+  eintragen → Dashboard führt Historie und Zuordnung nahtlos weiter.
 
 ## Bench-Test ohne PoE
 
@@ -95,10 +103,12 @@ Step-down-Modul 24 V→5 V auf EXT1 Pin 5/GND. Kein USB, kein PoE, alles auf gem
 
 ## Updates danach (OTA, kein USB)
 
+Ein Build, alle Geräte — die Konfiguration bleibt dabei unangetastet (NVS):
+
 ```bash
-esphome run devices/gas-flow-07.yaml     # baut + lädt über Ethernet hoch
-# oder alle:
-for f in devices/*.yaml; do esphome run --no-logs "$f"; done
+esphome run --no-logs gas-flowmeter.yaml --device <GERÄTE-IP>
+# oder per mDNS:
+esphome run --no-logs gas-flowmeter.yaml --device gas-flow-a1b2c3.local
 ```
 
 Optional ein **ESPHome-Dashboard** als Verwaltungsoberfläche (OTA-Buttons, Live-Logs, Status):
@@ -106,48 +116,64 @@ Optional ein **ESPHome-Dashboard** als Verwaltungsoberfläche (OTA-Buttons, Live
 esphome dashboard .
 ```
 
-## Migration von Bestandsgeräten (alte `argon-flow-XX`-Firmware)
+## Migration von Bestandsgeräten
 
-Geräte mit der alten Firmware publizieren auf `iwb/argon/<machine_id>` – das
-Dashboard-Backend versteht dieses Legacy-Präfix weiterhin, ein Update ist also
-**nicht dringend**. Beim nächsten OTA-Update wechselt das Gerät automatisch auf
-das neutrale Schema:
+**Alte Geräte-Firmware (`gas-flow-NN` mit einkompilierter `machine_id`):**
 
 ```bash
-esphome run --no-logs devices/gas-flow-01.yaml --device <GERÄTE-IP>
+esphome run --no-logs gas-flowmeter.yaml --device <GERÄTE-IP>
 ```
 
-- `--device <IP>` verwenden: der mDNS-Name ändert sich durch das Update von
-  `argon-flow-NN.local` auf `gas-flow-NN.local`.
-- Die `machine_id` bleibt gleich → das Dashboard führt Historie und Zuordnung
-  nahtlos weiter (beide Topic-Präfixe landen auf derselben Sensor-ID).
+- Nach dem Update publiziert das Gerät zunächst als `gas-<MAC-Suffix>` („nicht
+  zugeordnet“ im Dashboard). Im Geräte-Webinterface die **bisherige Anlagen-ID**
+  (z. B. `anlage-01`) und den **SP-Wert** (bisheriges `liter_per_pulse`) eintragen →
+  Historie und Zuordnung laufen nahtlos weiter; den übrig gebliebenen
+  `gas-<MAC>`-Eintrag im Sensor-Manager löschen.
 - Der **persistente Gesamtzähler bleibt erhalten**: er hängt an der internen
   Global-ID `vol_total` (unverändert), nicht am Gerätenamen; OTA lässt den
   NVS-Speicher unangetastet.
-- Das veraltete retained-Status-Flag unter `iwb/argon/<id>/status` räumt das
-  Dashboard-Backend automatisch ab, sobald das Gerät auf `iwb/gas/` publiziert.
+- Der mDNS-Name ändert sich (`gas-flow-01.local` → `gas-flow-<MAC-Suffix>.local`),
+  daher `--device <IP>` verwenden.
+
+**Uralt-Firmware (`argon-flow-NN`, publiziert `iwb/argon/…`):** gleicher Weg; das
+Backend versteht das Legacy-Präfix weiterhin und mappt auf dieselbe Sensor-ID.
 
 ## MQTT-Schnittstelle (pro Anlage)
 
-Topic-Präfix: `iwb/gas/<machine_id>` (z. B. `iwb/gas/anlage-01`).
+Topic-Präfix: `iwb/gas/<anlagen-id>` (z. B. `iwb/gas/anlage-01`).
 Bestands-Firmware nutzt `iwb/argon/<machine_id>` – das Backend abonniert beides.
 
 | Topic | Richtung | Inhalt |
 |---|---|---|
 | `.../status` | Publish (retained, LWT) | `online` / `offline` |
-| `.../flow` | Publish | momentaner Durchfluss [Nl/min] |
-| `.../total` | Publish | persistentes Gesamtvolumen [Nl] |
-| `.../voltage` | Publish | Diagnose-Spannung [V] |
-| `.../uptime` | Publish | Uptime [s] (Diagnose) |
+| `.../flow` | Publish (retained) | momentaner Durchfluss [Nl/min] |
+| `.../total` | Publish (retained) | persistentes Gesamtvolumen [Nl] |
+| `.../voltage` | Publish (retained) | Diagnose-Spannung [V] |
+| `.../uptime` | Publish (retained) | Uptime [s] (Diagnose) |
+| `.../meta` | Publish (retained) | JSON `{ip, mac, hostname, sp, fw}` (alle 60 s) |
 | `.../cmd` | Subscribe | `reset` → setzt Gesamtvolumen auf 0 |
 
-(Zusätzlich publiziert ESPHome die Entitäten unter `.../sensor/<object_id>/state`;
-das Dashboard nutzt nur die kurzen Topics oben.)
+Bei einer Änderung der Anlagen-ID räumt das Gerät seine alten retained Topics
+selbst ab (leere retained Publishes) und startet mit der neuen ID neu.
 
-Reset auch über Button (`Gesamtvolumen zurücksetzen`) im ESPHome-Dashboard / Home Assistant.
+Reset auch über den Button „Gesamtvolumen zurücksetzen“ im Geräte-Webinterface
+oder den „Zähler nullen“-Knopf im Dashboard-Sensor-Manager.
 
-## Wichtige Designentscheidungen (verifiziert gegen die Datenblätter)
+## Wichtige Designentscheidungen (verifiziert gegen Datenblätter/ESPHome-Quellen)
 
+- **Eine Firmware, Laufzeit-Identität** – `name_add_mac_suffix` macht den Hostnamen
+  eindeutig; Anlagen-ID und SP-Wert sind `template text`/`template number` mit
+  `restore_value` (NVS). Die MQTT-Topics werden per Lambda aus der Anlagen-ID
+  gebaut (`gas_id.h`), deshalb `topic_prefix: null` (keine automatischen
+  ESPHome-Topics). LWT/Birth/Shutdown-Message werden in `on_boot` (Prio 600,
+  nach dem NVS-Restore bei Prio 800, vor dem MQTT-Setup bei Prio 250) auf die
+  Laufzeit-Topics gesetzt.
+- **Reset-Kommando per Wildcard** – das Gerät abonniert `iwb/gas/+/cmd` und filtert
+  im Callback auf die eigene ID (die ID ist zur Compile-Zeit unbekannt).
+- **SP-Änderung wirkt nicht rückwirkend** – das pulse_meter-Sitzungstotal wird
+  **unskaliert** (rohe Pulse) geführt; erst das Puls-Delta wird mit dem aktuellen
+  SP-Wert multipliziert. Eine SP-Änderung mitten in der Sitzung erzeugt so keinen
+  Sprung im Gesamtzähler.
 - **Ethernet-Takt GPIO0 / CLK_OUT** – Besonderheit des WROVER-basierten POE2
   (offizielles Olimex-Beispiel + Arduino `ETH_CLOCK_GPIO0_OUT`). Mit GPIO17 wie beim
   alten POE bleibt Ethernet tot.
@@ -156,13 +182,17 @@ Reset auch über Button (`Gesamtvolumen zurücksetzen`) im ESPHome-Dashboard / H
 - **Persistenter Totalizer** via `globals: restore_value: true` – das `pulse_meter`-
   `total` allein überlebt einen Stromausfall **nicht**. `preferences: flash_write_interval: 10s`
   begrenzt den Rückwärtssprung des Zählers nach hartem Stromausfall auf ≤ 10 s.
+  Der NVS-Schlüssel hängt nur an der Global-ID `vol_total` → Zähler übersteht
+  auch den Wechsel auf die Einheits-Firmware.
 - **Zähler-Reset** (MQTT `cmd`/Button) nullt zusätzlich das pulse_meter-Sitzungstotal
-  (`pulse_meter.set_total_pulses: 0`) – sonst springt der Zähler beim nächsten Puls
+  (`set_total_pulses(0)`) – sonst springt der Zähler beim nächsten Puls
   auf das Sitzungsvolumen zurück.
 - **`internal_filter: 30ms` im Modus `PULSE`** – zählt nur Pegel, die ≥ 30 ms stabil
   anliegen (Festo-Pulsbreite `PULS` = 75–100 ms, real eingestellt: 75 ms). Entprellt **und** filtert Störspitzen,
   die im EDGE-Modus als Geisterverbrauch zählen würden.
 - **`timeout: 90s`** – ohne Pulse fällt der Momentandurchfluss nach 90 s auf 0
   (vorher 5 min „Phantom-Fluss“ nach dem letzten Puls).
+- **`web_server: local: true`** – das Webinterface funktioniert auch ohne
+  Internetzugang (JS liegt im Gerät, kein CDN).
 - **Pulssignal GPIO4** = UEXT Pin 3 / EXT1 Pin 19, kein Onboard-Pullup → externer
   Pull-up am Sensoreingang nötig (Festo-NPN braucht ≥ 2 mA Last). Siehe Anleitung, Abschnitt 3.
