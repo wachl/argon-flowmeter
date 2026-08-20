@@ -140,10 +140,14 @@ Das `Puls`-Menü ersetzt das `OutA`-Menü, sobald `Pin4 / bin` auf `VOL/MASS` st
 1. **[Edit]** drücken → mit **[A]/[B]** **`Puls`** wählen → **[Edit]**.
 2. **`SP`** blinkt (mit Volumeneinheit) = Normvolumen je Puls. Mit [A]/[B] einstellen und
    **exakt notieren** → geht 1:1 in `liter_per_pulse` der Gerätedatei ein.
-   Dimensionierung: `SP ≥ Q_max[Nl/min] / 300` (Pulse dürfen bei 100 ms Breite nicht
-   verschmelzen). Beispiel SFAH-50: `SP = 0,2 Nl`.
-3. **[Edit]** → **`PULS`** = **100 ms** lassen (Werk; Bereich 20–995 ms — nicht unter
-   60 ms, sonst greift der 30-ms-Störfilter der ESP32-Firmware nicht mehr sauber).
+   Dimensionierung: `SP ≥ Q_max[Nl/min] / 300` (Pulse dürfen nicht verschmelzen; bei
+   75–100 ms Breite konservativ mit 300 Pulsen/min rechnen). Unser Standard: **`SP = 1 Nl`**
+   (= Vorgabe `liter_per_pulse: "1.0"` in den Gerätedateien); Beispiel SFAH-50 mit
+   feinerer Auflösung: `SP = 0,2 Nl`.
+3. **[Edit]** → **`PULS`**: laut Handbuch 20–995 ms (Werk 100 ms), das Gerät bietet aber
+   nur diskrete Schritte an — an unseren Sensoren ist **75 ms** der passende wählbare
+   Wert. **75 ms so einstellen** — kompatibel mit der ESP32-Firmware (der 30-ms-Störfilter
+   braucht Pulse ≥ 60 ms).
 4. **[Edit]** → **`LOGC`** = **`NO`** (Schließer, Werk).
 5. **[Edit]** → fertig, RUN-Modus.
 
@@ -208,7 +212,7 @@ Topic-Präfix je Anlage: `iwb/gas/<machine_id>` (Bestandsgeräte mit alter Firmw
 ## 7. Inbetriebnahme-Check
 
 - [ ] Jumper auf **24 V**
-- [ ] Festo: **NPN** / **Pin4 = VOL/MASS** / **LOGC = NO** / **PULS = 100 ms** / **SP** gesetzt & notiert (Display zeigt oben `Puls`)
+- [ ] Festo: **NPN** / **Pin4 = VOL/MASS** / **LOGC = NO** / **PULS = 75 ms** / **SP = 1 Nl** gesetzt & notiert (Display zeigt oben `Puls`)
 - [ ] Festo: **GAS = Ar bzw. N2** (passend zur Anlage), **REF/Cond** hallenweit einheitlich
 - [ ] `liter_per_pulse` in `devices/gas-flow-NN.yaml` = notierter SP-Wert
 - [ ] Schutzbeschaltung **inkl. 1 kΩ Pull-up** an GPIO4

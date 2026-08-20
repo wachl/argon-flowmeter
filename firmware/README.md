@@ -160,7 +160,7 @@ Reset auch über Button (`Gesamtvolumen zurücksetzen`) im ESPHome-Dashboard / H
   (`pulse_meter.set_total_pulses: 0`) – sonst springt der Zähler beim nächsten Puls
   auf das Sitzungsvolumen zurück.
 - **`internal_filter: 30ms` im Modus `PULSE`** – zählt nur Pegel, die ≥ 30 ms stabil
-  anliegen (Festo-Pulsbreite `PULS` = 100 ms). Entprellt **und** filtert Störspitzen,
+  anliegen (Festo-Pulsbreite `PULS` = 75–100 ms, real eingestellt: 75 ms). Entprellt **und** filtert Störspitzen,
   die im EDGE-Modus als Geisterverbrauch zählen würden.
 - **`timeout: 90s`** – ohne Pulse fällt der Momentandurchfluss nach 90 s auf 0
   (vorher 5 min „Phantom-Fluss“ nach dem letzten Puls).

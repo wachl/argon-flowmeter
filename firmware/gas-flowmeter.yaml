@@ -28,7 +28,7 @@ substitutions:
   liter_per_pulse: "1.0"
   # Pin des Volumenpulses
   pulse_pin: "GPIO4"
-  # Entprellung: kleiner als die Festo-Pulsbreite PULS (Standard 100 ms),
+  # Entprellung: kleiner als die Festo-Pulsbreite PULS (real 75 ms, Werk 100 ms),
   # groesser als Schaltflanken/Störungen.
   pulse_filter: "30ms"
   # Wird laenger als diese Zeit kein Puls gesehen, gilt der Durchfluss als 0.
@@ -185,7 +185,7 @@ sensor:
     accuracy_decimals: 2
     internal_filter: ${pulse_filter}
     # PULSE: zaehlt nur Pegel, die >= internal_filter stabil anliegen (Festo-Puls
-    # PULS = 100 ms). Kurze Stoerspitzen, die im EDGE-Modus als Puls zaehlen
+    # PULS = 75-100 ms). Kurze Stoerspitzen, die im EDGE-Modus als Puls zaehlen
     # wuerden (Geisterverbrauch), fallen damit raus.
     internal_filter_mode: PULSE
     timeout: ${flow_timeout}
