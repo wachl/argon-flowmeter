@@ -209,8 +209,12 @@ sensor:
             if (delta < 0) delta = x;   // Schutz, falls pulse_meter intern resettet
             id(last_raw) = x;
             id(vol_total) += delta;
-            id(last_pulse_ms) = millis();   // fuer Live-Puls-Anzeige (Web-Dashboard)
-            id(pulse_count) += 1;
+            // Beim Boot publiziert pulse_meter einmal total=0 (kein echter Puls).
+            // Debug-Zaehler/Live-Puls-Anzeige nur bei echtem Volumenzuwachs anstossen.
+            if (delta > 0) {
+              id(last_pulse_ms) = millis();
+              id(pulse_count) += 1;
+            }
         - component.update: total_vol
 
   # ---- Persistentes Gesamtvolumen --------------------------------------------
