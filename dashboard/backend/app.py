@@ -42,6 +42,12 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 BASE = Path(__file__).parent
+# config.json ist lokal (gitignored, kann das MQTT-Passwort enthalten);
+# beim ersten Start wird sie aus der eingecheckten Vorlage erzeugt.
+if not (BASE / "config.json").exists():
+    import shutil
+    shutil.copyfile(BASE / "config.json.example", BASE / "config.json")
+    print("[config] config.json aus config.json.example angelegt")
 CONFIG = json.loads((BASE / "config.json").read_text(encoding="utf-8"))
 SENSORS_FILE = BASE / "sensors.json"
 DB_PATH = BASE / CONFIG.get("db_file", "gas.db")
@@ -351,8 +357,16 @@ def on_message(client, userdata, msg):
 _broker_state = {"embedded": False, "running": False, "ingest_connected": False, "port": None}
 
 
-def _run_embedded_broker(bind: str, port: int, allow_anonymous: bool) -> None:
-    """Kleiner eingebetteter MQTT-Broker (amqtt) in eigenem Thread + Event-Loop."""
+def _run_embedded_broker(bind: str, port: int, allow_anonymous: bool,
+                         username: str | None, password: str | None) -> None:
+    """Kleiner eingebetteter MQTT-Broker (amqtt) in eigenem Thread + Event-Loop.
+
+    Auth: Bei allow_anonymous=False UND gesetztem Benutzer+Passwort prueft der
+    Broker echte Logins (FileAuthPlugin, sha512-Hash-Datei — automatisch aus
+    der Konfiguration erzeugt). amqtts AnonymousAuthPlugin allein prueft bei
+    allow_anonymous=False naemlich NUR, ob irgendein Username mitkommt — das
+    Passwort wuerde ignoriert.
+    """
     import asyncio
     import logging
     try:
@@ -364,13 +378,27 @@ def _run_embedded_broker(bind: str, port: int, allow_anonymous: bool) -> None:
     for noisy in ("amqtt", "amqtt.broker", "transitions", "websockets"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
+    if not allow_anonymous and username and password:
+        from passlib.apps import custom_app_context   # amqtt-Dependency; gleicher
+        pw_file = BASE / "mqtt_passwd"                # Kontext wie FileAuthPlugin.verify
+        pw_file.write_text(f"{username}:{custom_app_context.hash(password)}\n",
+                           encoding="utf-8")
+        plugins = {"amqtt.plugins.authentication.FileAuthPlugin": {
+            "password_file": str(pw_file)}}
+        print(f"[broker] Passwort-Prüfung aktiv (Benutzer: {username})")
+    else:
+        if not allow_anonymous:
+            print("[broker] WARNUNG: anonym aus, aber kein Benutzer/Passwort in der "
+                  "Konfiguration – es wird nur das Vorhandensein eines Usernamens "
+                  "geprüft, KEIN Passwort!")
+        plugins = {"amqtt.plugins.authentication.AnonymousAuthPlugin": {
+            "allow_anonymous": bool(allow_anonymous)}}
+
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     config = {
         "listeners": {"default": {"type": "tcp", "bind": f"{bind}:{port}"}},
-        "plugins": {
-            "amqtt.plugins.authentication.AnonymousAuthPlugin": {"allow_anonymous": bool(allow_anonymous)},
-        },
+        "plugins": plugins,
     }
 
     async def _start():
@@ -399,7 +427,8 @@ def start_mqtt() -> None:
     if embedded:
         threading.Thread(
             target=_run_embedded_broker,
-            args=(m.get("bind", "0.0.0.0"), port, m.get("allow_anonymous", True)),
+            args=(m.get("bind", "0.0.0.0"), port, m.get("allow_anonymous", True),
+                  m.get("username") or None, m.get("password") or None),
             daemon=True,
         ).start()
         host = "127.0.0.1"               # Ingest verbindet sich immer lokal zum Broker

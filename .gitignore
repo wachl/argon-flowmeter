@@ -1,6 +1,9 @@
 # Secrets / lokale Konfiguration
 firmware/secrets.yaml
 firmware/.esphome/
+# config.json kann das MQTT-Passwort enthalten -> lokal halten (Vorlage: config.json.example)
+dashboard/backend/config.json
+dashboard/backend/mqtt_passwd
 
 # Backend-Laufzeit (gas.db aktuell, argon.db Alt-Name vor der Migration)
 dashboard/backend/gas.db

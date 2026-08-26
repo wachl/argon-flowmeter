@@ -28,6 +28,15 @@ und startet ihn standardmäßig auf `0.0.0.0:1883` (anonym). Ein separater Mosqu
 damit nicht nötig — die ESPHome-Geräte verbinden sich direkt mit der LAN-IP des
 Dashboard-PCs.
 
+**Passwortschutz:** In ⚙ „Anonyme Clients zulassen“ abwählen **und** Benutzer/Passwort
+setzen → der Broker prüft echte Logins (amqtt-`FileAuthPlugin`; die sha512-Hash-Datei
+`mqtt_passwd` erzeugt das Backend beim Start automatisch aus der Konfiguration).
+Benutzer/Passwort müssen zu `firmware/secrets.yaml` (`mqtt_user`/`mqtt_password`)
+passen — die Geräte haben ihre Zugangsdaten einkompiliert. Achtung: nur den Haken
+rauszunehmen (ohne Benutzer/Passwort) prüft lediglich, ob *irgendein* Username
+mitgeschickt wird — amqtts Anonymous-Plugin ignoriert Passwörter. MQTT läuft ohne
+TLS: Schutz gegen versehentliche/neugierige LAN-Clients, nicht gegen Mitschneiden.
+
 > Bekannte amqtt-Eigenheit (getestet mit 0.11.3): retained Messages werden bei
 > jedem Subscribe an **alle** neuen Subscriptions ausgeliefert, auch wenn das
 > Topic nicht passt. Für dieses System harmlos (Backend abonniert per Wildcard,
@@ -37,9 +46,10 @@ Dashboard-PCs.
 ```
 dashboard/
 ├─ backend/
-│  ├─ app.py            FastAPI-Server: eingebetteter Broker + MQTT-Ingest + REST-API + Frontend
-│  ├─ config.json       Broker (eingebettet/extern), Port, Preise €/m³, Standard-Schwellwerte
-│  ├─ sensors.json      Sensor-Registry (id → Name, Gas, Abteilung, Regeln) – wird vom Dashboard gepflegt
+│  ├─ app.py                 FastAPI-Server: eingebetteter Broker + MQTT-Ingest + REST-API + Frontend
+│  ├─ config.json.example    Vorlage → wird beim ersten Start als config.json kopiert
+│  ├─ config.json            lokale Konfiguration (gitignored — kann das MQTT-Passwort enthalten)
+│  ├─ sensors.json           Sensor-Registry (id → Name, Gas, Abteilung, Regeln) – wird vom Dashboard gepflegt
 │  └─ requirements.txt
 └─ frontend/
    ├─ index.html
