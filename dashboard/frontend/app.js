@@ -265,6 +265,7 @@
             <div style="display:inline-flex;background:var(--panel);border:1px solid var(--border);border-radius:9px;padding:3px;gap:2px">${seg(S.theme==='control','control','theme','Control')}${seg(S.theme==='analytics','analytics','theme','Light')}${seg(S.theme==='technical','technical','theme','Mono')}</div></div>
           <div style="display:flex;gap:8px;align-items:flex-end">
             <button data-action="open-sensors" style="${toolBtn}" title="Sensoren verwalten">Sensoren${naN?` <span style="color:var(--warn)">(${naN} neu)</span>`:''}</button>
+            <button data-action="open-flasher" style="${toolBtn}" title="Neues Gerät flashen · Firmware bauen · MAC für IT-Freischaltung auslesen">＋ Gerät</button>
             <button data-action="open-settings" style="${toolBtn};font-size:15px;padding:6px 11px" title="Einstellungen">⚙</button>
           </div>
           <div style="display:flex;flex-direction:column;gap:5px;align-items:flex-end">
@@ -364,7 +365,7 @@
     if(text && !isErr){ clearTimeout(M._msgT); M._msgT=setTimeout(()=>{ if(M){M.msg='';renderModal();} }, 2500); }
   }
 
-  function closeModal(){ M=null; renderModal(); poll(); }
+  function closeModal(){ if(M&&M.type==='flasher') macConsoleStop(); M=null; renderModal(); poll(); }
 
   // --- Downtime-Fenster-Editor (gemeinsam für Sensor-Override und Defaults) ----
   //   prefix 'f' -> M.edit.downtime (Sensor), 'c' -> M.edit.defaults.downtime (Settings)
@@ -503,6 +504,9 @@
         ${meta.mac?`<span style="font-family:var(--fontnum)">${esc(meta.mac)}</span>`:''}
         ${meta.fw?`<span>FW ${esc(meta.fw)}</span>`:''}
         <span style="flex-basis:100%;font-size:11px;color:var(--mute)">SP-Wert (= Festo-SP, Nl/Puls) und Anlagen-ID stellst du im Geräte-Webinterface ein — Link oben, kein Neu-Flashen nötig.</span>
+        ${meta.ip?`<span style="flex-basis:100%;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <button data-action="ota-start" style="${BTN}">Firmware-Update (OTA)</button>
+          <span id="ota-status" style="font-size:11px;color:var(--mute)">spielt den zuletzt gebauten Stand auf („＋ Gerät“ → Firmware bauen) · Gerät startet neu, Zähler bleibt erhalten</span></span>`:''}
       </div>`:'';
     return `<div style="display:flex;flex-direction:column;gap:15px">
       <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
@@ -655,15 +659,187 @@
     </div>`;
   }
 
+  // --- „＋ Gerät“: Erstflash (USB/Web Serial), Firmware-Build, MAC-Auslesen --
+  //   Web Serial braucht Chrome/Edge UND Secure Context -> funktioniert über
+  //   http://localhost:8000 am Dashboard-PC, nicht über die LAN-IP (plain HTTP).
+  let EWT_STATE = 'idle';                 // idle | loading | ready | failed
+  const SERIAL = {port:null, reader:null, run:false};
+  const serialOk = () => ('serial' in navigator) && window.isSecureContext;
+
+  async function ensureEwt(){
+    if(EWT_STATE==='ready'||EWT_STATE==='loading') return;
+    EWT_STATE='loading';
+    try{ await import('./vendor/esp-web-tools/install-button.js'); EWT_STATE='ready'; }
+    catch(e){ EWT_STATE='failed'; }
+    if(M&&M.type==='flasher') renderModal();
+  }
+
+  async function openFlasher(){
+    let fw=null; try{ fw=await api('api/firmware'); }catch(e){}
+    M={type:'flasher', fw, macLog:[], mac:null, serialActive:false, msg:'', msgErr:false};
+    renderModal();
+    if(serialOk()) ensureEwt();
+  }
+
+  // Firmware-Job (Build/OTA) alle 2,5 s nachladen, solange ein Modal ihn anzeigt.
+  // Im Sensor-Manager nur gezielte DOM-Updates (kein renderModal — würde die
+  // ungespeicherten Formularfelder überschreiben).
+  setInterval(async ()=>{
+    if(!M) return;
+    const watching = M.type==='flasher' || (M.type==='sensors' && M.fwWatch);
+    if(!watching) return;
+    let fw; try{ fw=await api('api/firmware'); }catch(e){ return; }
+    if(!M) return;
+    M.fw=fw;
+    if(M.type==='flasher'){
+      const box=document.getElementById('fw-box'); if(box) box.innerHTML=fwBoxHTML();
+      const log=document.getElementById('fw-log'); if(log) log.scrollTop=log.scrollHeight;
+    }else if(M.type==='sensors'){
+      const el=document.getElementById('ota-status');
+      if(fw.job.running){ if(el) el.textContent='läuft … '+(fw.job.log[fw.job.log.length-1]||''); }
+      else{ M.fwWatch=false; collectSensorForm(); await refreshReg();
+            const s=M.reg.sensors.find(x=>x.id===(M.edit&&M.edit.id));
+            setMsg(fw.job.ok?'OTA abgeschlossen ✓ — Gerät startet neu':'OTA fehlgeschlagen (Log unter „＋ Gerät“)', !fw.job.ok); }
+    }
+  }, 2500);
+
+  function fwBoxHTML(){
+    const fw=M.fw, job=fw&&fw.job;
+    if(!fw) return '<span style="font-size:12px;color:var(--danger)">Firmware-Status nicht ladbar — läuft das Backend auf dem Dashboard-PC?</span>';
+    const dt=ts=>new Date(ts*1000).toLocaleString('de-DE',{day:'2-digit',month:'2-digit',year:'2-digit',hour:'2-digit',minute:'2-digit'});
+    const build=fw.factory
+      ? `Build vom <b style="color:var(--text)">${esc(dt(fw.factory.mtime))}</b> · ${(fw.factory.size/1024).toFixed(0)} KB`
+      : '<b style="color:var(--warn)">noch kein Build vorhanden</b> — erst „Firmware bauen“ klicken';
+    const jstate=job.running
+      ? `<span style="color:var(--accent2)">⏳ ${job.type==='build'?'Build':'OTA → '+esc(job.target||'')} läuft …</span>`
+      : job.ok===true ? `<span style="color:var(--good)">✓ letzter Job (${esc(job.type||'')}) erfolgreich</span>`
+      : job.ok===false ? `<span style="color:var(--danger)">✗ letzter Job (${esc(job.type||'')}) fehlgeschlagen</span>` : '';
+    const log=(job.log&&job.log.length)?`<pre id="fw-log" style="margin:8px 0 0;background:var(--bg2);border:1px solid var(--border);border-radius:7px;padding:8px 10px;font-size:10.5px;line-height:1.45;color:var(--dim);max-height:150px;overflow:auto;white-space:pre-wrap;font-family:var(--fontnum)">${job.log.map(esc).join('\n')}</pre>`:'';
+    return `<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--dim)">
+        <button data-action="fw-build" style="${BTN}" ${job.running?'disabled':''}>Firmware bauen</button>
+        <span>${build}</span><span style="font-size:11.5px;font-family:var(--fontnum)">${jstate}</span>
+      </div>${log}`;
+  }
+
+  function flasherHTML(){
+    const step=(n,t)=>`<div style="display:flex;gap:11px;align-items:flex-start">
+      <span style="flex:none;width:22px;height:22px;border-radius:50%;background:var(--accent);color:var(--onacc);display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;font-family:var(--fontnum)">${n}</span>
+      <span style="font-size:12.5px;color:var(--text);line-height:1.5">${t}</span></div>`;
+    const box='border:1px solid var(--border);border-radius:9px;padding:13px 14px';
+    const serialHint = serialOk() ? '' :
+      `<div style="background:color-mix(in srgb,var(--warn) 13%,transparent);border:1px solid var(--warn);border-radius:8px;padding:9px 12px;font-size:12px;color:var(--warn);font-weight:600;margin-bottom:10px">
+        USB-Flashen &amp; MAC-Auslesen gehen nur in <b>Chrome/Edge</b> direkt am Dashboard-PC über
+        <span style="font-family:var(--fontnum)">http://localhost:8000</span> (Web Serial braucht einen Secure Context).
+        Alternative per Kommandozeile: <span style="font-family:var(--fontnum)">esphome run gas-flowmeter.yaml</span> im firmware/-Ordner.</div>`;
+    const flashBtn = !serialOk() ? '' :
+      EWT_STATE==='ready'
+        ? `<esp-web-install-button manifest="api/firmware/manifest.json"><button slot="activate" style="${BTNACC}">Firmware flashen (USB)</button></esp-web-install-button>`
+        : EWT_STATE==='failed'
+          ? `<span style="font-size:12px;color:var(--danger)">Flash-Modul (vendor/esp-web-tools) nicht ladbar.</span>`
+          : `<span style="font-size:12px;color:var(--mute)">Flash-Modul lädt …</span>`;
+    const macBig = M.mac ? `<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:9px">
+        <span style="font-family:var(--fontnum);font-size:21px;font-weight:700;letter-spacing:.04em;color:var(--accent)">${esc(M.mac)}</span>
+        <button data-action="mac-copy" style="${BTN}">kopieren</button>
+        <span style="font-size:11.5px;color:var(--dim)">→ diese Ethernet-MAC bei der IT zur Freischaltung einreichen</span></div>` : '';
+    const macLog = M.serialActive||M.macLog.length ? `<pre id="mac-log" style="margin:9px 0 0;background:var(--bg2);border:1px solid var(--border);border-radius:7px;padding:8px 10px;font-size:10.5px;line-height:1.45;color:var(--dim);max-height:130px;overflow:auto;white-space:pre-wrap;font-family:var(--fontnum)">${M.macLog.map(esc).join('\n')||'— warte auf Ausgabe (Board wird resettet) —'}</pre>` : '';
+    return `<div style="display:flex;flex-direction:column;gap:15px">
+      ${serialHint}
+      <div style="${box}">
+        <span style="font-size:13px;font-weight:700;color:var(--text);display:block;margin-bottom:11px">So kommt ein neues Gerät in die Messung</span>
+        <div style="display:flex;flex-direction:column;gap:9px">
+          ${step(1,'Unten prüfen, ob ein aktueller <b>Firmware-Build</b> vorhanden ist — sonst „Firmware bauen“ (dauert einige Minuten, einmal pro Firmware-Stand).')}
+          ${step(2,'ESP32-POE2 per <b>USB-C an diesen PC</b> anschließen. <b style="color:var(--danger)">⚠ Niemals USB und PoE gleichzeitig</b> — das Board ist nicht galvanisch isoliert!')}
+          ${step(3,'„<b>Firmware flashen (USB)</b>“ klicken → seriellen Port wählen → Installation abwarten. Bei einem fabrikneuen Board „Erase device“ mitwählen.')}
+          ${step(4,'„<b>MAC-Adresse auslesen</b>“ klicken (gleiche USB-Verbindung): das Board wird neu gestartet und zeigt seine <b>Ethernet-MAC</b> — kopieren.')}
+          ${step(5,'MAC bei der <b>IT zur Netzwerk-Freischaltung</b> einreichen. <b>⏱ Dauert bis zu 2 Arbeitstage</b> — Board kann solange beiseitegelegt werden (die Firmware zeigt die MAC jederzeit wieder an).')}
+          ${step(6,'Nach der Freischaltung: USB trennen, Gerät per <b>PoE</b> anschließen → es erscheint hier unter „Sensoren“ automatisch als <b>„nicht zugeordnet“</b> (mit IP-Link). Dort Name/Gas/Abteilung zuweisen; im Geräte-Webinterface (IP-Link) den <b>SP-Wert</b> vom Festo-Sensor und optional eine Anlagen-ID setzen.')}
+          ${step(7,'Festo-Sensor gemäß Anleitung (§3 Verdrahtung, §4 Sensor-Parametrierung) anschließen — SP am Sensor und SP-Wert im Gerät müssen exakt übereinstimmen.')}
+        </div>
+      </div>
+      <div style="${box}">
+        <span style="font-size:13px;font-weight:700;color:var(--text);display:block;margin-bottom:10px">Firmware-Build (gilt für alle Geräte)</span>
+        <div id="fw-box">${fwBoxHTML()}</div>
+      </div>
+      <div style="${box}">
+        <span style="font-size:13px;font-weight:700;color:var(--text);display:block;margin-bottom:10px">Erstflash per USB</span>
+        <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">${flashBtn}
+          <span style="font-size:11.5px;color:var(--mute)">Updates bereits verbundener Geräte laufen bequemer per OTA („Sensoren“ → Gerät → „Firmware-Update (OTA)“).</span></div>
+      </div>
+      <div style="${box}">
+        <span style="font-size:13px;font-weight:700;color:var(--text);display:block;margin-bottom:10px">MAC-Adresse auslesen (für die IT-Freischaltung)</span>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          ${serialOk()?`<button data-action="mac-console" style="${BTN}" ${M.serialActive?'disabled':''}>${M.serialActive?'Konsole aktiv …':'MAC-Adresse auslesen (USB)'}</button>`:''}
+          ${M.serialActive?`<button data-action="mac-console-stop" style="${BTN}">Stopp</button>`:''}
+          <span style="font-size:11.5px;color:var(--mute)">Liest die USB-Konsole des geflashten Boards; die Ethernet-MAC steht auch später im Sensor-Manager (Geräte-Box), sobald das Gerät online ist.</span>
+        </div>
+        ${macBig}${macLog}
+      </div>
+    </div>`;
+  }
+
+  let _macRedraw=null;
+  function macConsoleLine(line){
+    if(!M||M.type!=='flasher') return;
+    M.macLog.push(line); if(M.macLog.length>150) M.macLog.shift();
+    const m=line.match(/Ethernet-MAC[^0-9A-Fa-f]*([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})/);
+    if(m) M.mac=m[1].toUpperCase();
+    if(_macRedraw) return;                       // Renders drosseln (Zeilen kommen im Schwall)
+    _macRedraw=setTimeout(()=>{ _macRedraw=null;
+      if(M&&M.type==='flasher'){ renderModal();
+        const log=document.getElementById('mac-log'); if(log) log.scrollTop=log.scrollHeight; } }, 200);
+  }
+
+  async function macConsoleStart(){
+    if(!serialOk()||SERIAL.run) return;
+    let port;
+    try{ port=await navigator.serial.requestPort(); await port.open({baudRate:115200}); }
+    catch(e){ setMsg('Serielle Verbindung: '+e.message, true); return; }
+    SERIAL.port=port; SERIAL.run=true;
+    M.macLog=[]; M.mac=null; M.serialActive=true; renderModal();
+    // Board über RTS→EN resetten, damit das Boot-Log (mit MAC-Block) sofort kommt
+    try{
+      await port.setSignals({dataTerminalReady:false, requestToSend:true});
+      await new Promise(r=>setTimeout(r,200));
+      await port.setSignals({dataTerminalReady:false, requestToSend:false});
+    }catch(e){}
+    const dec=new TextDecoder(); let buf='';
+    try{
+      while(SERIAL.run && port.readable){
+        SERIAL.reader=port.readable.getReader();
+        try{
+          for(;;){
+            const {value,done}=await SERIAL.reader.read(); if(done) break;
+            buf+=dec.decode(value,{stream:true});
+            let i; while((i=buf.indexOf('\n'))>=0){
+              const line=buf.slice(0,i).replace(/\x1b\[[0-9;]*m/g,'').trimEnd();
+              buf=buf.slice(i+1); if(line) macConsoleLine(line);
+            }
+          }
+        }finally{ try{SERIAL.reader.releaseLock();}catch(e){} }
+      }
+    }catch(e){ if(SERIAL.run) macConsoleLine('[Verbindung getrennt: '+e.message+']'); }
+    macConsoleStop();
+  }
+
+  function macConsoleStop(){
+    SERIAL.run=false;
+    try{ if(SERIAL.reader) SERIAL.reader.cancel(); }catch(e){}
+    const p=SERIAL.port; SERIAL.port=null; SERIAL.reader=null;
+    if(p) setTimeout(()=>{ try{ p.close(); }catch(e){} }, 150);
+    if(M&&M.type==='flasher'&&M.serialActive){ M.serialActive=false; renderModal(); }
+  }
+
   // --- Modal-Rendering ------------------------------------------------------
   function renderModal(){
     if(!M){ modalEl.innerHTML=''; return; }
-    const title=M.type==='sensors'?'Sensoren verwalten':'Einstellungen';
+    const title=M.type==='sensors'?'Sensoren verwalten':M.type==='flasher'?'Neues Gerät & Firmware':'Einstellungen';
     const body=M.type==='sensors'
       ? `<div style="display:flex;gap:16px;min-height:0;flex:1">
            <div style="flex:0 0 285px;min-width:0;min-height:0">${sensorListHTML()}</div>
            <div style="flex:1;min-width:0;overflow-y:auto;padding-right:4px">${sensorFormHTML()}</div>
          </div>`
+      : M.type==='flasher'
+      ? `<div style="overflow-y:auto;min-height:0;flex:1;padding-right:4px">${flasherHTML()}</div>`
       : `<div style="overflow-y:auto;min-height:0;flex:1;padding-right:4px">${settingsHTML()}</div>`;
     modalEl.innerHTML=`
     <div id="modal-backdrop" style="position:fixed;inset:0;background:rgba(4,7,12,.62);z-index:50;display:flex;align-items:center;justify-content:center;padding:20px;font-family:var(--fontsans)">
@@ -697,7 +873,24 @@
     // ---- Modals öffnen/schließen
     else if(act==='open-sensors'){ ev.stopPropagation(); openSensorManager(el.getAttribute('data-id')||null); return; }
     else if(act==='open-settings'){ openSettings(); return; }
+    else if(act==='open-flasher'){ openFlasher(); return; }
     else if(act==='modal-close'){ closeModal(); return; }
+
+    // ---- „＋ Gerät“ / Firmware
+    else if(act==='fw-build'){
+      try{ await api('api/firmware/build',{method:'POST'}); M.fw=await api('api/firmware'); renderModal(); }
+      catch(err){ setMsg('Fehler: '+err.message,true); } return; }
+    else if(act==='mac-console'){ macConsoleStart(); return; }
+    else if(act==='mac-console-stop'){ macConsoleStop(); return; }
+    else if(act==='mac-copy'){
+      try{ await navigator.clipboard.writeText(M.mac||''); setMsg('MAC kopiert ✓'); }
+      catch(err){ setMsg('Kopieren fehlgeschlagen: '+err.message,true); } return; }
+    else if(act==='ota-start'){ collectSensorForm();
+      const sMeta=((M.reg.sensors.find(x=>x.id===M.edit.id)||{}).meta)||{};
+      if(!confirm(`Firmware-Update (OTA) auf „${M.edit.name}“ (${sMeta.ip||'?'}) starten?\nDas Gerät startet danach neu; Zähler und Einstellungen bleiben erhalten.`)) return;
+      try{ await api('api/sensors/'+encodeURIComponent(M.edit.id)+'/ota',{method:'POST'});
+        M.fwWatch=true; const el=document.getElementById('ota-status'); if(el) el.textContent='OTA gestartet …'; }
+      catch(err){ setMsg('Fehler: '+err.message,true); } return; }
 
     // ---- Sensor-Manager
     else if(act==='sel-sensor'){ const id=el.getAttribute('data-id'); const s=M.reg.sensors.find(x=>x.id===id);

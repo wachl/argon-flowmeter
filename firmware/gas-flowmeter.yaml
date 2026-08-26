@@ -58,6 +58,11 @@ esphome:
             id(active_id) = gas_machine_id(id(machine_id_cfg).state);
             id(booted) = true;
             ESP_LOGI("gas", "Anlagen-ID: %s", id(active_id).c_str());
+            // MAC direkt nach dem Flashen ueber die USB-Konsole ablesbar
+            // (fuer die IT-Freischaltung, bevor das Geraet Netzwerk hat).
+            ESP_LOGI("mac", "=====================================================");
+            ESP_LOGI("mac", "Ethernet-MAC (fuer IT-Freischaltung): %s", gas_eth_mac_pretty().c_str());
+            ESP_LOGI("mac", "=====================================================");
 
             std::string st = "iwb/gas/" + id(active_id) + "/status";
             mqtt::MQTTMessage birth;
@@ -226,7 +231,7 @@ script:
             if (addr.is_set() && addr.is_ip4()) { ip = addr.str(); break; }
           }
           std::string payload = "{\"ip\":\"" + ip +
-              "\",\"mac\":\"" + get_mac_address_pretty() +
+              "\",\"mac\":\"" + gas_eth_mac_pretty() +
               "\",\"hostname\":\"" + App.get_name() +
               "\",\"sp\":" + str_sprintf("%.3f", id(sp_value).state) +
               ",\"fw\":\"" ESPHOME_VERSION " (" + App.get_compilation_time() + ")\"}";
@@ -272,6 +277,16 @@ interval:
   - interval: 60s
     then:
       - script.execute: publish_meta
+  # Solange kein Netzwerk da ist (Neugeraet wartet auf IT-Freischaltung),
+  # die Ethernet-MAC regelmaessig auf die USB-Konsole loggen — so laesst sie
+  # sich jederzeit ablesen, nicht nur direkt nach dem Boot.
+  - interval: 15s
+    then:
+      - lambda: |-
+          if (!network::is_connected()) {
+            ESP_LOGI("mac", "Ethernet-MAC (fuer IT-Freischaltung): %s — warte auf Netzwerk ...",
+                     gas_eth_mac_pretty().c_str());
+          }
 
 # ----------------------------------------------------------------------------
 #  Zaehlerlogik

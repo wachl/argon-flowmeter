@@ -4,6 +4,7 @@
 // Laufzeit aus dem Geraete-Webinterface; ohne Konfiguration faellt sie auf
 // eine eindeutige, MAC-basierte ID zurueck (gleiches Suffix wie der Hostname).
 #include <cctype>
+#include <cstdio>
 #include <string>
 
 #include "esphome/core/helpers.h"
@@ -28,4 +29,16 @@ static inline std::string gas_machine_id(const std::string &configured) {
 
 static inline std::string gas_topic(const std::string &configured, const char *leaf) {
   return "iwb/gas/" + gas_machine_id(configured) + "/" + leaf;
+}
+
+// Ethernet-MAC des Boards (Espressif-Schema: Basis-MAC + 3 im letzten Oktett).
+// DAS ist die Adresse, die Switch/IT im Netz sehen — fuer die Freischaltung.
+static inline std::string gas_eth_mac_pretty() {
+  uint8_t mac[6];
+  esphome::get_mac_address_raw(mac);
+  mac[5] = (uint8_t) (mac[5] + 3);
+  char buf[18];
+  snprintf(buf, sizeof buf, "%02X:%02X:%02X:%02X:%02X:%02X",
+           mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+  return buf;
 }

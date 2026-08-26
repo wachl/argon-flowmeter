@@ -17,11 +17,14 @@ wird im Dashboard zugeordnet.
 
 1. **Sensor** parametrieren (Anleitung, Abschnitt 4): NPN, **Pin4 = VOL/MASS**, SP notieren,
    GAS = Ar bzw. N2.
-2. **Firmware**: `firmware/gas-flowmeter.yaml` ist **die eine Firmware für alle Geräte**
-   → `esphome run gas-flowmeter.yaml`. Jedes Gerät bekommt über seine MAC einen
+2. **Firmware**: `firmware/gas-flowmeter.yaml` ist **die eine Firmware für alle Geräte**.
+   Neues Gerät: im Dashboard **„＋ Gerät“** → Firmware bauen, per USB im Browser
+   flashen, **Ethernet-MAC auslesen** → MAC von der IT freischalten lassen (bis zu
+   2 Arbeitstage) → PoE anschließen. Jedes Gerät bekommt über seine MAC einen
    eindeutigen Hostnamen (`gas-flow-<MAC-Suffix>`) und per DHCP eine eindeutige IP.
    **SP-Wert** und **Anlagen-ID** werden danach im Geräte-Webinterface `http://<IP>/`
-   eingestellt (kein Neu-Flashen bei SP-Änderungen). Geräte publizieren
+   eingestellt (kein Neu-Flashen bei SP-Änderungen); Firmware-Updates laufen per
+   OTA-Button im Sensor-Manager. Geräte publizieren
    `iwb/gas/<anlagen-id>/{flow,total,voltage,status,meta}` (das Backend versteht
    zusätzlich das Legacy-Schema `iwb/argon/<id>/…` der Bestands-Firmware).
 3. **Dashboard**: `cd dashboard/backend && python app.py` → http://127.0.0.1:8000.

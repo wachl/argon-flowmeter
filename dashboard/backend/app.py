@@ -23,18 +23,22 @@ Start:
 """
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import re
 import sqlite3
+import subprocess
+import sys
 import threading
 import time
+from collections import deque
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 BASE = Path(__file__).parent
@@ -451,6 +455,79 @@ def publish_reset(sensor_id: str) -> bool:
     return True
 
 
+# ------------------------------------------------------- Firmware-Verwaltung
+# Build (esphome compile) und OTA-Updates laufen als Subprozess auf dem
+# Dashboard-PC; der Web-Flasher (ESP Web Tools, Erstflash per USB) bekommt
+# Manifest + factory.bin ueber /api/firmware/. Es laeuft max. ein Job zugleich.
+FIRMWARE_DIR = BASE.parent.parent / "firmware"
+FIRMWARE_YAML = FIRMWARE_DIR / "gas-flowmeter.yaml"
+FW_BUILD_DIR = FIRMWARE_DIR / ".esphome" / "build" / "gas-flow" / ".pioenvs" / "gas-flow"
+FW_FACTORY_BIN = FW_BUILD_DIR / "firmware.factory.bin"
+FW_OTA_BIN = FW_BUILD_DIR / "firmware.ota.bin"
+
+_fw_lock = threading.Lock()
+_fw_job: dict = {"type": None, "target": None, "running": False, "ok": None,
+                 "started": None, "finished": None, "log": deque(maxlen=300)}
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def _fw_run_job(jtype: str, args: list[str], target: str | None, timeout: int) -> None:
+    """esphome-Subprozess ausfuehren und Ausgabe in das Job-Log spiegeln."""
+    ok = False
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "esphome", *args],
+            cwd=str(FIRMWARE_DIR), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, encoding="utf-8", errors="replace",
+        )
+        deadline = time.time() + timeout
+        for line in proc.stdout:
+            _fw_job["log"].append(_ANSI_RE.sub("", line.rstrip())[:300])
+            if time.time() > deadline:
+                proc.kill()
+                _fw_job["log"].append(f"[abbruch] Timeout nach {timeout} s")
+                break
+        ok = proc.wait(timeout=30) == 0
+    except Exception as exc:                           # noqa: BLE001
+        _fw_job["log"].append(f"[fehler] {exc}")
+    _fw_job.update(running=False, ok=ok, finished=int(time.time()))
+    print(f"[firmware] Job {jtype} ({target or '-'}) beendet: {'OK' if ok else 'FEHLER'}")
+
+
+def start_fw_job(jtype: str, args: list[str], target: str | None, timeout: int) -> bool:
+    """Job starten; False, wenn bereits einer laeuft."""
+    with _fw_lock:
+        if _fw_job["running"]:
+            return False
+        _fw_job.update(type=jtype, target=target, running=True, ok=None,
+                       started=int(time.time()), finished=None)
+        _fw_job["log"].clear()
+        _fw_job["log"].append(f"[start] esphome {' '.join(args)}")
+    threading.Thread(target=_fw_run_job, args=(jtype, args, target, timeout),
+                     daemon=True).start()
+    return True
+
+
+def fw_info() -> dict:
+    def _bin(p: Path) -> dict | None:
+        if not p.exists():
+            return None
+        st = p.stat()
+        return {"size": st.st_size, "mtime": int(st.st_mtime)}
+    return {
+        "yaml_exists": FIRMWARE_YAML.exists(),
+        "factory": _bin(FW_FACTORY_BIN),
+        "ota": _bin(FW_OTA_BIN),
+        "job": {
+            "type": _fw_job["type"], "target": _fw_job["target"],
+            "running": _fw_job["running"], "ok": _fw_job["ok"],
+            "started": _fw_job["started"], "finished": _fw_job["finished"],
+            "log": list(_fw_job["log"])[-40:],
+        },
+    }
+
+
 # -------------------------------------------------------------------- Aggregate
 def read_hourly(sensor: str, since_ts: int) -> dict[int, float]:
     with db() as c:
@@ -744,6 +821,64 @@ def api_reset_sensor(sid: str):
         return JSONResponse({"ok": False, "error": "unknown sensor"}, status_code=404)
     ok = publish_reset(sid)
     return {"ok": ok, "error": None if ok else "no mqtt client"}
+
+
+@app.get("/api/firmware")
+def api_firmware_info():
+    """Status der Firmware-Verwaltung: Builds, laufender Job, Log-Ausschnitt."""
+    return fw_info()
+
+
+@app.post("/api/firmware/build")
+def api_firmware_build():
+    """Firmware neu bauen (esphome compile) — Voraussetzung fuer Flash/OTA."""
+    if not FIRMWARE_YAML.exists():
+        return JSONResponse({"ok": False, "error": f"{FIRMWARE_YAML} fehlt"}, status_code=500)
+    if not start_fw_job("build", ["compile", FIRMWARE_YAML.name], None, timeout=900):
+        return JSONResponse({"ok": False, "error": "es läuft bereits ein Job"}, status_code=409)
+    return {"ok": True}
+
+
+@app.post("/api/sensors/{sid}/ota")
+def api_sensor_ota(sid: str):
+    """OTA-Update: aktuellen Build auf das Gerät schieben (IP aus dem meta-Topic)."""
+    if sid not in SENSORS:
+        return JSONResponse({"ok": False, "error": "unknown sensor"}, status_code=404)
+    if not FW_OTA_BIN.exists():
+        return JSONResponse({"ok": False, "error": "kein Build vorhanden — erst bauen"},
+                            status_code=400)
+    ip = parse_meta(read_live().get(sid, {}).get("meta")).get("ip")
+    try:
+        ipaddress.ip_address(ip)
+    except (TypeError, ValueError):
+        return JSONResponse({"ok": False, "error": "Geräte-IP unbekannt (kein meta-Topic — "
+                            "Bestands-Firmware? Einmal per USB/CLI flashen)"}, status_code=400)
+    if not start_fw_job("ota", ["upload", FIRMWARE_YAML.name, "--device", ip], sid, timeout=300):
+        return JSONResponse({"ok": False, "error": "es läuft bereits ein Job"}, status_code=409)
+    return {"ok": True, "ip": ip}
+
+
+@app.get("/api/firmware/manifest.json")
+def api_firmware_manifest():
+    """ESP-Web-Tools-Manifest fuer den Erstflash per USB (Web Serial)."""
+    if not FW_FACTORY_BIN.exists():
+        return JSONResponse({"error": "kein Build vorhanden"}, status_code=404)
+    version = datetime.fromtimestamp(FW_FACTORY_BIN.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+    return {
+        "name": "Gas-Durchflussmesser (iwb)",
+        "version": version,
+        "new_install_prompt_erase": True,
+        "builds": [{"chipFamily": "ESP32",
+                    "parts": [{"path": "factory.bin", "offset": 0}]}],
+    }
+
+
+@app.get("/api/firmware/factory.bin")
+def api_firmware_factory():
+    if not FW_FACTORY_BIN.exists():
+        return JSONResponse({"error": "kein Build vorhanden"}, status_code=404)
+    return FileResponse(str(FW_FACTORY_BIN), media_type="application/octet-stream",
+                        filename="gas-flowmeter.factory.bin")
 
 
 @app.delete("/api/sensors/{sid}")

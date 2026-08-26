@@ -44,13 +44,23 @@ Stromausfall und OTA-Updates. Die Firmware ist **gas-neutral**: welches Gas
 > ⚠️ **PoE-Kabel abziehen, solange USB steckt.** Der ESP32-POE2 ist nicht galvanisch
 > isoliert – USB **und** PoE gleichzeitig zerstört Board/PC (Olimex-Handbuch).
 
+**Bequemster Weg: im Dashboard über den „＋ Gerät“-Button** (Chrome/Edge auf
+`http://localhost:8000` am Dashboard-PC): Firmware bauen → per USB im Browser
+flashen (ESP Web Tools) → **MAC-Adresse auslesen** → MAC bei der IT freischalten
+lassen (bis zu 2 Arbeitstage) → PoE anschließen. Das eingebaute How-To führt
+durch alle Schritte. Per CLI geht es genauso:
+
 1. **Flashen (einmalig per USB):**
    ```bash
    esphome run gas-flowmeter.yaml
    ```
-2. USB trennen → PoE anschließen. Das Gerät holt sich per DHCP eine IP und meldet
-   sich am Broker als `gas-<MAC-Suffix>` → erscheint im Dashboard automatisch als
-   **„nicht zugeordnet“** (inkl. seiner IP im Sensor-Manager).
+   Die Firmware loggt beim Boot (und alle 15 s, solange kein Netzwerk da ist) die
+   **Ethernet-MAC** auf die USB-Konsole — das ist die Adresse für die
+   IT-Freischaltung (Espressif-Schema: Basis-MAC + 3).
+2. USB trennen → PoE anschließen (nach der IT-Freischaltung). Das Gerät holt sich
+   per DHCP eine IP und meldet sich am Broker als `gas-<MAC-Suffix>` → erscheint
+   im Dashboard automatisch als **„nicht zugeordnet“** (inkl. seiner IP im
+   Sensor-Manager).
 3. **Geräte-Webinterface öffnen** — `http://<IP>/` (Link im Sensor-Manager) oder
    `http://gas-flow-<MAC-Suffix>.local/` — und einstellen:
    - **SP-Wert (Nl pro Puls)** = der am Festo-SFAH eingestellte Schwellwert **SP**
@@ -103,7 +113,11 @@ Step-down-Modul 24 V→5 V auf EXT1 Pin 5/GND. Kein USB, kein PoE, alles auf gem
 
 ## Updates danach (OTA, kein USB)
 
-Ein Build, alle Geräte — die Konfiguration bleibt dabei unangetastet (NVS):
+Ein Build, alle Geräte — die Konfiguration bleibt dabei unangetastet (NVS).
+
+**Bequemster Weg:** im Dashboard-Sensor-Manager auf **„Firmware-Update (OTA)“**
+klicken (nutzt den zuletzt über „＋ Gerät“ → „Firmware bauen“ erzeugten Stand;
+die Geräte-IP kommt aus dem meta-Topic). Per CLI:
 
 ```bash
 esphome run --no-logs gas-flowmeter.yaml --device <GERÄTE-IP>

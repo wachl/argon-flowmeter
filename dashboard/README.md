@@ -11,6 +11,15 @@ und Sensorübersicht.
   als „nicht zugeordnet“ und werden hier benannt und einem Gas + einer Abteilung
   zugewiesen; pro Sensor Leck-Schwellen und Downtime-Fenster überschreibbar,
   Gesamtzähler-Reset (MQTT-Kommando ans Gerät), Abteilungen anlegen/löschen.
+  Die Geräte-Box zeigt IP (Link aufs Geräte-Webinterface), SP-Wert, MAC, Firmware
+  und bietet **Firmware-Update (OTA)** per Klick.
+- **＋ Gerät-Button** → Inbetriebnahme neuer Geräte, mit eingebautem How-To:
+  Firmware bauen (`esphome compile` als Backend-Job), **Erstflash per USB im
+  Browser** (ESP Web Tools/Web Serial, lokal vendored unter `frontend/vendor/`),
+  **MAC-Adresse auslesen** über die USB-Konsole (fürs Freischalten der MAC durch
+  die IT — dauert erfahrungsgemäß bis zu 2 Arbeitstage). USB-Flashen/MAC-Auslesen
+  funktionieren nur in Chrome/Edge über `http://localhost:8000` am Dashboard-PC
+  (Web Serial braucht einen Secure Context).
 - **⚙-Button** → Einstellungen: MQTT-Broker (eingebettet/extern, Port, anonym),
   Gas-Preise €/m³, Offline-Schwelle, Standard-Leck-/Downtime-Regeln.
 
@@ -57,8 +66,11 @@ ohne verbundene Geräte bleiben Trend und Live-Werte leer.
    Broker eintragen. Die ESPHome-Geräte tragen in `firmware/secrets.yaml` als
    `mqtt_broker` die **LAN-IP des Dashboard-PCs** ein (nicht `127.0.0.1`).
 2. `python app.py` starten (dauerhaft z. B. als Dienst via NSSM / Taskplaner / systemd).
-3. Sobald ein Gerät publiziert, erscheint es im Dashboard als **„nicht zugeordnet“** →
-   Sensoren-Button → Name, Gas, Abteilung zuweisen. Fertig.
+3. **Neues Gerät:** „＋ Gerät“-Button im Dashboard folgen (How-To eingebaut):
+   Firmware bauen → Board per USB flashen → **Ethernet-MAC auslesen** → MAC von der
+   IT freischalten lassen (**bis zu 2 Arbeitstage**) → Gerät per PoE anschließen.
+   Es erscheint dann als **„nicht zugeordnet“** → Sensoren-Button → Name, Gas,
+   Abteilung zuweisen; SP-Wert im Geräte-Webinterface (IP-Link) setzen. Fertig.
 4. Preise, Offline-Schwelle und Standard-Alarmregeln in ⚙ setzen; abweichende Regeln
    pro Sensor direkt am Sensor.
 
@@ -77,6 +89,8 @@ Das Backend abonniert **beide** Topic-Schemata und mappt sie auf dieselbe Sensor
 | `…/<id>/flow` | Nl/min (Momentandurchfluss) |
 | `…/<id>/total` | Nl (monoton, persistent im Gerät) |
 | `…/<id>/voltage` | V (Diagnose) |
+| `…/<id>/uptime` | s (Diagnose) |
+| `…/<id>/meta` | retained JSON `{ip, mac, hostname, sp, fw}` — Geräte-Box im Sensor-Manager, IP-Ziel für OTA |
 | `…/<id>/cmd` ← | `reset` = Gesamtzähler des Geräts nullen (wird auf beiden Präfixen gesendet) |
 
 `iwb/gas/` ist das Präfix der aktuellen Firmware (`firmware/gas-flowmeter.yaml`);
@@ -92,6 +106,10 @@ gas-neutrale Firmware noch nicht bekommen haben — das Backend versteht beides.
 | `GET /api/sensors` | Registry inkl. Live-Status, Overrides, Defaults (Sensor-Manager) |
 | `POST /api/sensors/{id}` | Sensor ändern (`{name, gas, dept, leak, downtime}`; `null` = Standard) |
 | `POST /api/sensors/{id}/reset` | Reset-Kommando an das Gerät (Zähler nullen) |
+| `POST /api/sensors/{id}/ota` | OTA-Update: aktuellen Build aufs Gerät schieben (IP aus dem meta-Topic) |
+| `GET /api/firmware` | Build-/Job-Status (Build vorhanden? Job läuft? Log-Ausschnitt) |
+| `POST /api/firmware/build` | Firmware bauen (`esphome compile` im `firmware/`-Ordner des Checkouts) |
+| `GET /api/firmware/manifest.json` · `…/factory.bin` | ESP-Web-Tools-Manifest + Factory-Image für den USB-Erstflash |
 | `DELETE /api/sensors/{id}` | Registry-Eintrag löschen (Gerät registriert sich ggf. neu) |
 | `POST /api/departments` · `DELETE /api/departments/{id}` | Abteilung anlegen/umbenennen/löschen |
 | `GET /api/config` · `POST /api/config` | Einstellungen lesen/schreiben → `config.json` |
