@@ -11,6 +11,12 @@
       "name": "anlage-01",
       "gas": "argon",
       "dept": "bp"
+    },
+    {
+      "id": "gas-e998c8",
+      "name": "gas-e998c8",
+      "gas": "argon",
+      "dept": "bp"
     }
   ]
 }
