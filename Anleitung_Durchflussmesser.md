@@ -181,15 +181,20 @@ Das `Puls`-Menü ersetzt das `OutA`-Menü, sobald `Pin4 / bin` auf `VOL/MASS` st
 
 Voraussetzungen, Setup, Erst-Flash (USB) und OTA-Updates: siehe **`firmware/README.md`**.
 
-Kurz:
-1. `pip install esphome`, `secrets.yaml` aus Vorlage anlegen.
-2. **PoE abziehen**, per USB-C: `esphome run gas-flowmeter.yaml` — **eine Firmware für
-   alle Geräte**, keine Gerätedatei nötig.
-3. USB trennen, PoE anschließen — das Gerät bekommt per DHCP eine IP (an seiner
-   eindeutigen MAC; im Router reservieren) und erscheint im Dashboard als
-   „nicht zugeordnet“ (mit IP-Link).
+Kurz (bequemster Weg: **Dashboard → „＋ Gerät“**, das eingebaute How-To führt durch
+alle Schritte inkl. USB-Flashen im Browser und MAC-Auslesen):
+1. **PoE abziehen**, Board per USB-C an den Dashboard-PC → im Dashboard („＋ Gerät“)
+   flashen — **eine Firmware für alle Geräte**. (CLI-Alternative:
+   `esphome run gas-flowmeter.yaml` im `firmware/`-Ordner.)
+2. **Ethernet-MAC auslesen** („MAC-Adresse auslesen“ im „＋ Gerät“-Dialog; steht auch
+   im Boot-Log) und **bei der IT zur Freischaltung einreichen — dauert bis zu
+   2 Arbeitstage**.
+3. Nach der Freischaltung: USB trennen, PoE anschließen — das Gerät bekommt per DHCP
+   eine IP (an seiner eindeutigen MAC; im Router reservieren) und erscheint im
+   Dashboard als „nicht zugeordnet“ (mit IP-Link).
 4. Im **Geräte-Webinterface** `http://<IP>/` einstellen: **SP-Wert** = notierter
-   **SP** vom Festo-Sensor, optional **Anlagen-ID**. OTA ab jetzt über Ethernet.
+   **SP** vom Festo-Sensor, optional **Anlagen-ID**. OTA-Updates ab jetzt über
+   Ethernet (Dashboard-Sensor-Manager → „Firmware-Update (OTA)“).
 
 > ⚠️ **USB und PoE niemals gleichzeitig** — Board/PC-Schaden (Board nicht isoliert).
 
