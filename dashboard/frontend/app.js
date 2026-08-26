@@ -619,9 +619,15 @@
         <div style="display:grid;grid-template-columns:1fr 110px;gap:12px">
           <div><span style="${LBL}">Bind-Adresse</span><input id="c-bind" value="${esc(m.bind||'0.0.0.0')}" style="${INP};font-family:var(--fontnum)"></div>
           <div><span style="${LBL}">Port</span><input id="c-port" type="number" value="${esc(m.port||1883)}" style="${INP};text-align:right;font-family:var(--fontnum)"></div>
+          <div><span style="${LBL}">Benutzer</span><input id="c-user" value="${esc(m.username||'')}" style="${INP}"></div>
+          <div><span style="${LBL}">Passwort</span><input id="c-pass" type="password" placeholder="${m.has_password?'••• (unverändert)':''}" style="${INP}"></div>
         </div>
         <label style="display:flex;gap:8px;align-items:center;font-size:12.5px;color:var(--text);cursor:pointer;margin-top:11px">
-          <input type="checkbox" id="c-anon" ${m.allow_anonymous?'checked':''} style="${CHK}"> Anonyme Clients zulassen</label>`
+          <input type="checkbox" id="c-anon" ${m.allow_anonymous?'checked':''} style="${CHK}"> Anonyme Clients zulassen</label>
+        <span style="display:block;font-size:11px;color:var(--mute);margin-top:7px">
+          Haken raus + Benutzer/Passwort gesetzt = der Broker <b>prüft echte Logins</b> (Passwort-Hash-Datei, automatisch erzeugt).
+          Benutzer/Passwort müssen zu <span style="font-family:var(--fontnum)">firmware/secrets.yaml</span> (mqtt_user/mqtt_password) passen,
+          sonst werden die Geräte abgewiesen. Greift nach Backend-Neustart.</span>`
         :`
         <div style="display:grid;grid-template-columns:1fr 110px;gap:12px">
           <div><span style="${LBL}">Externer Broker (Host/IP)</span><input id="c-broker" value="${esc(m.broker||'')}" style="${INP};font-family:var(--fontnum)"></div>
