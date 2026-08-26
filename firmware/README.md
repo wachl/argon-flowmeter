@@ -38,6 +38,11 @@ Stromausfall und OTA-Updates. Die Firmware ist **gas-neutral**: welches Gas
    # mqtt_broker / Passwörter eintragen; API-Key erzeugen:
    openssl rand -base64 32
    ```
+   `mqtt_user`/`mqtt_password` pflegt danach das **Dashboard**: Änderungen in
+   ⚙ → MQTT-Broker werden automatisch in diese Datei gespiegelt, damit jeder
+   Build (und damit jeder Erstflash) die aktuellen Zugangsdaten einkompiliert
+   bekommt. Bereits laufende Geräte brauchen nach einer Passwortänderung einmal
+   Build + OTA.
 
 ## Neues Gerät in Betrieb nehmen
 

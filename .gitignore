@@ -6,6 +6,7 @@ dashboard/backend/config.json
 dashboard/backend/mqtt_passwd
 
 # Backend-Laufzeit (gas.db aktuell, argon.db Alt-Name vor der Migration)
+dashboard/backend/backups/
 dashboard/backend/gas.db
 dashboard/backend/gas.db-wal
 dashboard/backend/gas.db-shm

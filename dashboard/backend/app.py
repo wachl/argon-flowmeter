@@ -23,10 +23,15 @@ Start:
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import ipaddress
 import json
 import os
 import re
+import secrets as pysecrets
+import shutil
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -45,7 +50,6 @@ BASE = Path(__file__).parent
 # config.json ist lokal (gitignored, kann das MQTT-Passwort enthalten);
 # beim ersten Start wird sie aus der eingecheckten Vorlage erzeugt.
 if not (BASE / "config.json").exists():
-    import shutil
     shutil.copyfile(BASE / "config.json.example", BASE / "config.json")
     print("[config] config.json aus config.json.example angelegt")
 CONFIG = json.loads((BASE / "config.json").read_text(encoding="utf-8"))
@@ -93,6 +97,63 @@ def save_sensors() -> None:
     payload = {"departments": DEPARTMENTS, "sensors": list(SENSORS.values())}
     with _lock:
         _write_json(SENSORS_FILE, payload)
+
+
+def save_config() -> None:
+    with _lock:
+        _write_json(BASE / "config.json", CONFIG)
+
+
+# ------------------------------------------------------------------ Auth/Login
+# Benutzer-Ebene: Ist ein admin_password gesetzt, ist das Dashboard ohne Login
+# nur lesend (Live-Ansicht, Historie, Export); alle aendernden Aktionen und die
+# Einstellungen verlangen ein Login-Token (HMAC-signiert, 30 Tage gueltig).
+# Ohne admin_password bleibt alles offen (Erstinbetriebnahme).
+TOKEN_TTL = 30 * 86400
+
+
+def _ensure_auth_secret() -> None:
+    if not CONFIG.get("auth_secret"):
+        CONFIG["auth_secret"] = pysecrets.token_hex(32)
+        save_config()
+
+
+def make_token() -> str:
+    _ensure_auth_secret()
+    exp = int(time.time()) + TOKEN_TTL
+    sig = hmac.new(CONFIG["auth_secret"].encode(), str(exp).encode(),
+                   hashlib.sha256).hexdigest()
+    return f"{exp}.{sig}"
+
+
+def check_token(tok: str) -> bool:
+    secret = CONFIG.get("auth_secret", "")
+    if not secret or not tok:
+        return False
+    try:
+        exp_s, sig = tok.split(".", 1)
+        exp = int(exp_s)
+    except ValueError:
+        return False
+    if exp < time.time():
+        return False
+    want = hmac.new(secret.encode(), exp_s.encode(), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(want, sig)
+
+
+def auth_required() -> bool:
+    return bool(CONFIG.get("admin_password"))
+
+
+def is_admin(req) -> bool:
+    if not auth_required():
+        return True
+    tok = req.headers.get("x-auth") or req.query_params.get("auth") or ""
+    return check_token(tok)
+
+
+def deny():
+    return JSONResponse({"ok": False, "error": "login required"}, status_code=401)
 
 
 def dept_name(dept_id: str | None) -> str:
@@ -198,6 +259,11 @@ def init_db() -> None:
             " level TEXT, value REAL, raised_at INTEGER,"
             " acknowledged INTEGER DEFAULT 0, ack_at INTEGER, ack_value REAL)"
         )
+        # Migration: auto_cleared markiert Alarme, die sich selbst aufgeloest
+        # haben (z. B. Offline-Alarm, Geraet wieder online)
+        acols = [r[1] for r in c.execute("PRAGMA table_info(alarms)")]
+        if "auto_cleared" not in acols:
+            c.execute("ALTER TABLE alarms ADD COLUMN auto_cleared INTEGER DEFAULT 0")
     with db() as c:
         for sid, total in c.execute("SELECT machine, total FROM live WHERE total IS NOT NULL"):
             if total is not None:
@@ -234,12 +300,13 @@ def update_live(sensor: str, **fields) -> None:
 
 # ------------------------------------------------------------------------ Alarms
 def raise_alarm(sensor: str, gas: str, atype: str, level: str, value: float, now_ts: int,
-                *, max_nl: float | None = None) -> None:
+                *, max_nl: float | None = None, last_seen: int | None = None) -> None:
     """Alarm anlegen – mit Dedup und Re-Arm nach Quittierung.
 
     Aktiver (unquittierter) Alarm gleichen Typs -> nur aktualisieren. Nach Quittierung:
     Leck/Mehrverbrauch erst nach 6 h Ruhe erneut; Downtime erst, wenn seit Quittierung
-    erneut max_nl zusätzlich verbraucht wurde.
+    erneut max_nl zusätzlich verbraucht wurde; Offline erst, wenn das Gerät seit der
+    Quittierung wieder online war (last_seen > ack_at).
     """
     with _lock, db() as c:
         row = c.execute(
@@ -254,11 +321,23 @@ def raise_alarm(sensor: str, gas: str, atype: str, level: str, value: float, now
             if atype == "downtime":
                 if ack_value is not None and value <= ack_value + (max_nl or 0):
                     return
+            elif atype == "offline":
+                if ack_at and last_seen is not None and ack_at >= last_seen:
+                    return                 # gleiche Offline-Phase, bereits quittiert
             elif ack_at and (now_ts - ack_at) < 6 * 3600:
                 return
         c.execute(
             "INSERT INTO alarms(sensor,gas,type,level,value,raised_at) VALUES(?,?,?,?,?,?)",
             (sensor, gas, atype, level, value, now_ts))
+
+
+def clear_offline_alarm(sensor: str) -> None:
+    """Offline-Alarm automatisch aufloesen, sobald das Geraet wieder online ist."""
+    with _lock, db() as c:
+        c.execute(
+            "UPDATE alarms SET acknowledged=1, ack_at=?, ack_value=value, auto_cleared=1 "
+            "WHERE sensor=? AND type='offline' AND acknowledged=0",
+            (int(time.time()), sensor))
 
 
 def ack_alarm(aid: int) -> bool:
@@ -354,18 +433,18 @@ def on_message(client, userdata, msg):
 
 
 # Laufzeit-Status für das Dashboard (read-only via /api/config).
-_broker_state = {"embedded": False, "running": False, "ingest_connected": False, "port": None}
+_broker_state = {"embedded": False, "running": False, "ingest_connected": False,
+                 "port": None, "auth": False}
 
 
-def _run_embedded_broker(bind: str, port: int, allow_anonymous: bool,
+def _run_embedded_broker(bind: str, port: int,
                          username: str | None, password: str | None) -> None:
     """Kleiner eingebetteter MQTT-Broker (amqtt) in eigenem Thread + Event-Loop.
 
-    Auth: Bei allow_anonymous=False UND gesetztem Benutzer+Passwort prueft der
-    Broker echte Logins (FileAuthPlugin, sha512-Hash-Datei — automatisch aus
-    der Konfiguration erzeugt). amqtts AnonymousAuthPlugin allein prueft bei
-    allow_anonymous=False naemlich NUR, ob irgendein Username mitkommt — das
-    Passwort wuerde ignoriert.
+    Auth ergibt sich aus den Zugangsdaten: Benutzer UND Passwort gesetzt ->
+    der Broker prueft echte Logins (FileAuthPlugin, sha512-Hash-Datei —
+    automatisch aus der Konfiguration erzeugt); sonst sind anonyme Clients
+    erlaubt. (amqtts AnonymousAuthPlugin allein prueft KEINE Passwoerter.)
     """
     import asyncio
     import logging
@@ -378,7 +457,8 @@ def _run_embedded_broker(bind: str, port: int, allow_anonymous: bool,
     for noisy in ("amqtt", "amqtt.broker", "transitions", "websockets"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
-    if not allow_anonymous and username and password:
+    auth = bool(username and password)
+    if auth:
         from passlib.apps import custom_app_context   # amqtt-Dependency; gleicher
         pw_file = BASE / "mqtt_passwd"                # Kontext wie FileAuthPlugin.verify
         pw_file.write_text(f"{username}:{custom_app_context.hash(password)}\n",
@@ -387,12 +467,9 @@ def _run_embedded_broker(bind: str, port: int, allow_anonymous: bool,
             "password_file": str(pw_file)}}
         print(f"[broker] Passwort-Prüfung aktiv (Benutzer: {username})")
     else:
-        if not allow_anonymous:
-            print("[broker] WARNUNG: anonym aus, aber kein Benutzer/Passwort in der "
-                  "Konfiguration – es wird nur das Vorhandensein eines Usernamens "
-                  "geprüft, KEIN Passwort!")
         plugins = {"amqtt.plugins.authentication.AnonymousAuthPlugin": {
-            "allow_anonymous": bool(allow_anonymous)}}
+            "allow_anonymous": True}}
+    _broker_state["auth"] = auth
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -410,7 +487,7 @@ def _run_embedded_broker(bind: str, port: int, allow_anonymous: bool,
         loop.run_until_complete(_start())
         _broker_state["running"] = True
         print(f"[broker] eingebetteter MQTT-Broker läuft auf {bind}:{port} "
-              f"(anonym={allow_anonymous})")
+              f"(auth={'an' if auth else 'aus'})")
         loop.run_forever()
     except Exception as exc:                          # noqa: BLE001
         _broker_state["running"] = False
@@ -427,7 +504,7 @@ def start_mqtt() -> None:
     if embedded:
         threading.Thread(
             target=_run_embedded_broker,
-            args=(m.get("bind", "0.0.0.0"), port, m.get("allow_anonymous", True),
+            args=(m.get("bind", "0.0.0.0"), port,
                   m.get("username") or None, m.get("password") or None),
             daemon=True,
         ).start()
@@ -493,6 +570,77 @@ FIRMWARE_YAML = FIRMWARE_DIR / "gas-flowmeter.yaml"
 FW_BUILD_DIR = FIRMWARE_DIR / ".esphome" / "build" / "gas-flow" / ".pioenvs" / "gas-flow"
 FW_FACTORY_BIN = FW_BUILD_DIR / "firmware.factory.bin"
 FW_OTA_BIN = FW_BUILD_DIR / "firmware.ota.bin"
+SECRETS_FILE = FIRMWARE_DIR / "secrets.yaml"
+
+
+# --------------------------------------------- firmware/secrets.yaml-Abgleich
+# Die MQTT-Zugangsdaten werden zur BUILD-ZEIT in die Firmware einkompiliert
+# (!secret in gas-flowmeter.yaml). Damit Dashboard-Konfiguration und Firmware
+# nicht auseinanderlaufen, spiegelt das Backend Benutzer/Passwort beim
+# Speichern nach secrets.yaml und meldet Abweichungen an das Frontend.
+def _secret_value(rest: str) -> str:
+    rest = rest.strip()
+    m = re.match(r'^"((?:[^"\\]|\\.)*)"', rest)
+    if m:
+        return m.group(1).replace('\\"', '"').replace("\\\\", "\\")
+    return rest.split("#", 1)[0].strip().strip("'")
+
+
+def read_secrets() -> dict[str, str]:
+    out: dict[str, str] = {}
+    if not SECRETS_FILE.exists():
+        return out
+    try:
+        for line in SECRETS_FILE.read_text(encoding="utf-8").splitlines():
+            m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.*)$", line)
+            if m:
+                out[m.group(1)] = _secret_value(m.group(2))
+    except OSError:
+        pass
+    return out
+
+
+def sync_secrets(username: str, password: str) -> bool:
+    """mqtt_user/mqtt_password in firmware/secrets.yaml nachziehen (Kommentare bleiben)."""
+    if not SECRETS_FILE.exists():
+        return False
+
+    def q(v: str) -> str:
+        return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+    try:
+        lines = SECRETS_FILE.read_text(encoding="utf-8").splitlines()
+        for key, val in (("mqtt_user", username), ("mqtt_password", password)):
+            for i, line in enumerate(lines):
+                if re.match(rf"^{key}\s*:", line):
+                    lines[i] = f"{key}: {q(val)}"
+                    break
+            else:
+                lines.append(f"{key}: {q(val)}")
+        SECRETS_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return True
+    except OSError as exc:
+        print(f"[secrets] Abgleich fehlgeschlagen: {exc}")
+        return False
+
+
+_lan_ip_cache: dict = {"ip": None, "ts": 0.0}
+
+
+def lan_ip() -> str | None:
+    """LAN-IP dieses PCs (= Broker-Adresse fuer die Geraete bei eingebettetem Broker)."""
+    if time.time() - _lan_ip_cache["ts"] < 60 and _lan_ip_cache["ip"]:
+        return _lan_ip_cache["ip"]
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(1)
+        s.connect(("8.8.8.8", 80))       # kein Traffic — nur Routing-Lookup
+        ip = s.getsockname()[0]
+        s.close()
+    except OSError:
+        ip = None
+    _lan_ip_cache.update(ip=ip, ts=time.time())
+    return ip
 
 _fw_lock = threading.Lock()
 _fw_job: dict = {"type": None, "target": None, "running": False, "ok": None,
@@ -643,14 +791,26 @@ def over_consumption(daily: list[float]):
     return None
 
 
-def evaluate_sensor_alarms(s: dict, daily: list[float], flow: float,
-                           status: str, now: datetime, now_ts: int) -> None:
+def evaluate_sensor_alarms(s: dict, daily: list[float], flow: float, status: str,
+                           last_seen: int | None, now: datetime, now_ts: int) -> None:
     """Alarme für einen (zugeordneten) Sensor prüfen und ggf. anlegen."""
     sid, gas = s["id"], s["gas"]
     leak = sensor_leak(s)
     if status == "online" and leak["min"] <= flow < leak["active"]:
         level = "critical" if flow >= (leak["min"] + leak["active"]) / 2 else "warning"
         raise_alarm(sid, gas, "leak", level, round(flow, 2), now_ts)
+
+    # Offline-Warnung: Sensor meldet sich laenger als die Schwelle nicht mehr.
+    # Loest sich automatisch auf, sobald das Geraet wieder online ist.
+    off_min = int(CONFIG.get("offline_alarm_minutes", 15) or 0)
+    if status == "online":
+        clear_offline_alarm(sid)
+    elif off_min > 0 and last_seen:
+        off_s = now_ts - last_seen
+        if off_s >= off_min * 60:
+            level = "critical" if off_s >= 2 * 3600 else "warning"
+            raise_alarm(sid, gas, "offline", level, round(off_s / 60), now_ts,
+                        last_seen=last_seen)
 
     over = over_consumption(daily)
     if over:
@@ -702,12 +862,13 @@ def build_payload() -> dict:
                                "ip": meta.get("ip"), "hostname": meta.get("hostname")})
             continue
 
-        evaluate_sensor_alarms(s, daily, flow, status, now, now_ts)
+        evaluate_sensor_alarms(s, daily, flow, status, lv.get("updated"), now, now_ts)
         sensors_out.append({
             "id": sid, "name": s.get("name", sid), "gas": s["gas"],
             "deptId": s.get("dept"), "deptName": dept_name(s.get("dept")),
             "daily": daily, "hourly": hourly,
             "flow": round(flow, 2), "status": status, "total": total,
+            "lastSeen": lv.get("updated"), "note": s.get("note") or "",
         })
 
     alarms = active_alarms()
@@ -734,6 +895,7 @@ def build_payload() -> dict:
         "sensors": sensors_out,
         "unassigned": unassigned,
         "alarms": alarms,
+        "authRequired": auth_required(),
         "broker": {
             "embedded": _broker_state.get("embedded", False),
             "embedded_running": _broker_state.get("running", False),
@@ -773,13 +935,35 @@ def api_health():
             "embedded_broker": _broker_state}
 
 
+@app.get("/api/auth")
+def api_auth(req: Request):
+    return {"required": auth_required(), "admin": is_admin(req)}
+
+
+@app.post("/api/login")
+async def api_login(req: Request):
+    try:
+        body = await req.json()
+    except Exception:                                  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": "invalid JSON"}, status_code=400)
+    if not auth_required():
+        return {"ok": True, "token": "", "required": False}
+    pw = str(body.get("password", ""))
+    if not hmac.compare_digest(pw, str(CONFIG.get("admin_password", ""))):
+        time.sleep(0.8)                    # bremst Durchprobieren
+        return JSONResponse({"ok": False, "error": "wrong password"}, status_code=403)
+    return {"ok": True, "token": make_token(), "required": True}
+
+
 @app.get("/api/sensors")
-def api_get_sensors():
-    """Registry inkl. Live-Status für den Sensor-Editor.
+def api_get_sensors(req: Request):
+    """Registry inkl. Live-Status für den Sensor-Editor (Admin).
 
     leak/downtime sind die Sensor-Overrides (null = Standardwerte greifen);
     die Standardwerte selbst stehen in defaults.
     """
+    if not is_admin(req):
+        return deny()
     live = read_live()
     now_ts = int(time.time())
     stale = CONFIG.get("stale_seconds", 120)
@@ -791,6 +975,7 @@ def api_get_sensors():
             "id": s["id"], "name": s.get("name", s["id"]),
             "gas": s.get("gas"), "dept": s.get("dept"),
             "leak": s.get("leak"), "downtime": s.get("downtime"),
+            "note": s.get("note") or "",
             "online": bool(fresh and (lv.get("status") == "online")),
             "flow": round(float(lv.get("flow") or 0.0), 2) if fresh else 0.0,
             "total": round(float(lv.get("total") or 0.0), 1),
@@ -804,6 +989,8 @@ def api_get_sensors():
 
 @app.post("/api/sensors/{sid}")
 async def api_set_sensor(sid: str, req: Request):
+    if not is_admin(req):
+        return deny()
     if sid not in SENSORS:
         return JSONResponse({"ok": False, "error": "unknown sensor"}, status_code=404)
     try:
@@ -813,6 +1000,12 @@ async def api_set_sensor(sid: str, req: Request):
     s = SENSORS[sid]
     if "name" in body:
         s["name"] = str(body["name"]).strip() or sid
+    if "note" in body:                     # persistente Kurz-Notiz ("" = entfernen)
+        note = str(body["note"] or "").strip()[:2000]
+        if note:
+            s["note"] = note
+        else:
+            s.pop("note", None)
     if "gas" in body:
         gas = body["gas"]
         if gas is not None and gas not in CONFIG.get("gases", {}):
@@ -845,7 +1038,9 @@ async def api_set_sensor(sid: str, req: Request):
 
 
 @app.post("/api/sensors/{sid}/reset")
-def api_reset_sensor(sid: str):
+def api_reset_sensor(sid: str, req: Request):
+    if not is_admin(req):
+        return deny()
     if sid not in SENSORS:
         return JSONResponse({"ok": False, "error": "unknown sensor"}, status_code=404)
     ok = publish_reset(sid)
@@ -853,14 +1048,18 @@ def api_reset_sensor(sid: str):
 
 
 @app.get("/api/firmware")
-def api_firmware_info():
+def api_firmware_info(req: Request):
     """Status der Firmware-Verwaltung: Builds, laufender Job, Log-Ausschnitt."""
+    if not is_admin(req):
+        return deny()
     return fw_info()
 
 
 @app.post("/api/firmware/build")
-def api_firmware_build():
+def api_firmware_build(req: Request):
     """Firmware neu bauen (esphome compile) — Voraussetzung fuer Flash/OTA."""
+    if not is_admin(req):
+        return deny()
     if not FIRMWARE_YAML.exists():
         return JSONResponse({"ok": False, "error": f"{FIRMWARE_YAML} fehlt"}, status_code=500)
     if not start_fw_job("build", ["compile", FIRMWARE_YAML.name], None, timeout=900):
@@ -869,8 +1068,10 @@ def api_firmware_build():
 
 
 @app.post("/api/sensors/{sid}/ota")
-def api_sensor_ota(sid: str):
+def api_sensor_ota(sid: str, req: Request):
     """OTA-Update: aktuellen Build auf das Gerät schieben (IP aus dem meta-Topic)."""
+    if not is_admin(req):
+        return deny()
     if sid not in SENSORS:
         return JSONResponse({"ok": False, "error": "unknown sensor"}, status_code=404)
     if not FW_OTA_BIN.exists():
@@ -888,22 +1089,33 @@ def api_sensor_ota(sid: str):
 
 
 @app.get("/api/firmware/manifest.json")
-def api_firmware_manifest():
-    """ESP-Web-Tools-Manifest fuer den Erstflash per USB (Web Serial)."""
+def api_firmware_manifest(req: Request):
+    """ESP-Web-Tools-Manifest fuer den Erstflash per USB (Web Serial).
+
+    factory.bin enthaelt die einkompilierten MQTT-Zugangsdaten -> Admin-Token
+    noetig. ESP Web Tools laedt Manifest + parts selbst (ohne unsere Header),
+    daher wird das Token als ?auth=-Query durchgereicht.
+    """
+    if not is_admin(req):
+        return deny()
     if not FW_FACTORY_BIN.exists():
         return JSONResponse({"error": "kein Build vorhanden"}, status_code=404)
     version = datetime.fromtimestamp(FW_FACTORY_BIN.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+    tok = req.query_params.get("auth", "")
+    part = "factory.bin" + (f"?auth={tok}" if tok else "")
     return {
         "name": "Gas-Durchflussmesser (iwb)",
         "version": version,
         "new_install_prompt_erase": True,
         "builds": [{"chipFamily": "ESP32",
-                    "parts": [{"path": "factory.bin", "offset": 0}]}],
+                    "parts": [{"path": part, "offset": 0}]}],
     }
 
 
 @app.get("/api/firmware/factory.bin")
-def api_firmware_factory():
+def api_firmware_factory(req: Request):
+    if not is_admin(req):
+        return deny()
     if not FW_FACTORY_BIN.exists():
         return JSONResponse({"error": "kein Build vorhanden"}, status_code=404)
     return FileResponse(str(FW_FACTORY_BIN), media_type="application/octet-stream",
@@ -911,7 +1123,9 @@ def api_firmware_factory():
 
 
 @app.delete("/api/sensors/{sid}")
-def api_delete_sensor(sid: str):
+def api_delete_sensor(sid: str, req: Request):
+    if not is_admin(req):
+        return deny()
     if sid in SENSORS:
         del SENSORS[sid]
         save_sensors()
@@ -919,13 +1133,38 @@ def api_delete_sensor(sid: str):
 
 
 @app.post("/api/alarms/{aid}/ack")
-def api_ack_alarm(aid: int):
+def api_ack_alarm(aid: int, req: Request):
+    if not is_admin(req):
+        return deny()
     return {"ok": ack_alarm(aid)}
+
+
+@app.get("/api/alarms/history")
+def api_alarm_history(limit: int = 200):
+    """Alarm-Historie: aktive und quittierte Alarme, neueste zuerst (read-only)."""
+    limit = max(1, min(int(limit), 1000))
+    with db() as c:
+        rows = c.execute(
+            "SELECT id, sensor, gas, type, level, value, raised_at,"
+            " acknowledged, ack_at, auto_cleared FROM alarms"
+            " ORDER BY raised_at DESC, id DESC LIMIT ?", (limit,)).fetchall()
+    out = []
+    for (aid, sensor, gas, atype, level, value, raised_at,
+         ack, ack_at, auto_cleared) in rows:
+        s = SENSORS.get(sensor, {})
+        out.append({"id": aid, "sensor": sensor, "sensorName": s.get("name", sensor),
+                    "gas": gas, "deptName": dept_name(s.get("dept")),
+                    "type": atype, "level": level, "value": value,
+                    "raised_at": raised_at, "acknowledged": bool(ack),
+                    "ack_at": ack_at, "auto_cleared": bool(auto_cleared)})
+    return {"alarms": out}
 
 
 @app.post("/api/departments")
 async def api_departments(req: Request):
     """Abteilung anlegen oder umbenennen ({id?, name})."""
+    if not is_admin(req):
+        return deny()
     try:
         body = await req.json()
     except Exception:                                  # noqa: BLE001
@@ -954,9 +1193,11 @@ async def api_departments(req: Request):
 
 
 @app.delete("/api/departments/{did}")
-def api_delete_department(did: str):
+def api_delete_department(did: str, req: Request):
     """Abteilung löschen; zugeordnete Sensoren werden auf 'keine Abteilung' gesetzt."""
     global DEPARTMENTS
+    if not is_admin(req):
+        return deny()
     if not any(d["id"] == did for d in DEPARTMENTS):
         return JSONResponse({"ok": False, "error": "unknown dept"}, status_code=404)
     DEPARTMENTS = [d for d in DEPARTMENTS if d["id"] != did]
@@ -968,24 +1209,41 @@ def api_delete_department(did: str):
 
 
 @app.get("/api/config")
-def api_get_config():
+def api_get_config(req: Request):
+    """Einstellungen inkl. MQTT-Passwort im Klartext — deshalb Admin-only."""
+    if not is_admin(req):
+        return deny()
     m = CONFIG.get("mqtt", {})
+    sec = read_secrets()
+    bk = CONFIG.get("backup", {})
     return {
         "stale_seconds": CONFIG.get("stale_seconds", 120),
+        "offline_alarm_minutes": CONFIG.get("offline_alarm_minutes", 15),
         "gases": CONFIG.get("gases", {}),
         "defaults": CONFIG.get("defaults", {}),
+        "backup": {"enabled": bool(bk.get("enabled", True)),
+                   "keep_days": int(bk.get("keep_days", 30))},
+        "auth": {"required": auth_required()},
         "mqtt": {
             "embedded": m.get("embedded", True),
             "bind": m.get("bind", "0.0.0.0"),
             "port": m.get("port", 1883),
-            "allow_anonymous": m.get("allow_anonymous", True),
             "username": m.get("username", ""),
-            "has_password": bool(m.get("password")),
+            "password": m.get("password", ""),
             "broker": m.get("broker", "127.0.0.1"),
+        },
+        # Abgleich mit firmware/secrets.yaml (Build-Zeit-Zugangsdaten der Geräte)
+        "secrets": {
+            "exists": SECRETS_FILE.exists(),
+            "user_match": sec.get("mqtt_user", "") == m.get("username", ""),
+            "password_match": sec.get("mqtt_password", "") == m.get("password", ""),
+            "broker": sec.get("mqtt_broker", ""),
+            "lan_ip": lan_ip(),
         },
         "status": {
             "embedded_running": _broker_state.get("running", False),
             "ingest_connected": _broker_state.get("ingest_connected", False),
+            "auth": _broker_state.get("auth", False),
         },
     }
 
@@ -995,16 +1253,38 @@ async def api_set_config(req: Request):
     """Einstellungen übernehmen und nach config.json schreiben.
 
     Preise/Defaults greifen sofort; Broker-Felder erst nach Neustart -> restart_required.
+    MQTT-Zugangsdaten werden zusätzlich nach firmware/secrets.yaml gespiegelt,
+    damit der nächste Firmware-Build automatisch passt.
     """
+    if not is_admin(req):
+        return deny()
     try:
         body = await req.json()
     except Exception:                                  # noqa: BLE001
         return JSONResponse({"ok": False, "error": "invalid JSON"}, status_code=400)
 
     restart = False
+    creds_changed = False
+    fresh_token = None
     try:
         if "stale_seconds" in body:
             CONFIG["stale_seconds"] = int(body["stale_seconds"])
+        if "offline_alarm_minutes" in body:
+            v = max(0, int(body["offline_alarm_minutes"]))
+            CONFIG["offline_alarm_minutes"] = v
+        if isinstance(body.get("backup"), dict):
+            bk = CONFIG.setdefault("backup", {})
+            if "enabled" in body["backup"]:
+                bk["enabled"] = bool(body["backup"]["enabled"])
+            if "keep_days" in body["backup"]:
+                bk["keep_days"] = max(1, int(body["backup"]["keep_days"]))
+        if "admin_password" in body:
+            newpw = str(body["admin_password"])
+            if newpw != CONFIG.get("admin_password", ""):
+                CONFIG["admin_password"] = newpw
+                # Secret rotieren -> alle alten Login-Tokens werden ungültig
+                CONFIG["auth_secret"] = pysecrets.token_hex(32)
+                fresh_token = make_token() if newpw else ""
         if isinstance(body.get("gases"), dict):
             gases = CONFIG.setdefault("gases", {})
             for gid, gv in body["gases"].items():
@@ -1027,9 +1307,8 @@ async def api_set_config(req: Request):
         if isinstance(body.get("mqtt"), dict):
             mq = CONFIG.setdefault("mqtt", {})
             bm = body["mqtt"]
-            for k in ("embedded", "allow_anonymous"):
-                if k in bm and bool(bm[k]) != bool(mq.get(k)):
-                    mq[k] = bool(bm[k]); restart = True
+            if "embedded" in bm and bool(bm["embedded"]) != bool(mq.get("embedded")):
+                mq["embedded"] = bool(bm["embedded"]); restart = True
             if "bind" in bm and str(bm["bind"]) != mq.get("bind"):
                 mq["bind"] = str(bm["bind"]); restart = True
             if "broker" in bm and str(bm["broker"]) != mq.get("broker"):
@@ -1037,14 +1316,197 @@ async def api_set_config(req: Request):
             if "port" in bm and int(bm["port"]) != int(mq.get("port", 1883)):
                 mq["port"] = int(bm["port"]); restart = True
             if "username" in bm and str(bm["username"]) != mq.get("username", ""):
-                mq["username"] = str(bm["username"]); restart = True
-            if bm.get("password"):
-                mq["password"] = str(bm["password"]); restart = True
+                mq["username"] = str(bm["username"]); restart = creds_changed = True
+            if "password" in bm and str(bm["password"]) != mq.get("password", ""):
+                mq["password"] = str(bm["password"]); restart = creds_changed = True
     except (TypeError, ValueError) as exc:
         return JSONResponse({"ok": False, "error": f"bad value: {exc}"}, status_code=400)
 
-    _write_json(BASE / "config.json", CONFIG)
-    return {"ok": True, "restart_required": restart}
+    save_config()
+    secrets_synced = None
+    if creds_changed:
+        mq = CONFIG.get("mqtt", {})
+        secrets_synced = sync_secrets(mq.get("username", ""), mq.get("password", ""))
+    out = {"ok": True, "restart_required": restart, "secrets_synced": secrets_synced}
+    if fresh_token is not None:
+        out["token"] = fresh_token         # Setzer bleibt eingeloggt
+    return out
+
+
+@app.post("/api/restart")
+def api_restart(req: Request):
+    """Backend neu starten (Broker-/Konfig-Änderungen übernehmen).
+
+    Antwortet sofort; danach beendet sich der Prozess und ein abgekoppelter
+    Helfer startet app.py neu, sobald der Port frei ist. Läuft das Backend
+    unter einem Supervisor (GAS_SUPERVISED gesetzt), reicht das Beenden.
+    """
+    if not is_admin(req):
+        return deny()
+    threading.Timer(0.7, _do_restart).start()
+    return {"ok": True}
+
+
+def _do_restart() -> None:
+    print("[restart] Backend-Neustart angefordert — Prozess beendet sich")
+    try:
+        if not os.environ.get("GAS_SUPERVISED"):
+            port = int(os.environ.get("PORT", CONFIG.get("port", 8000)))
+            logdir = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "gas-dashboard"
+            logdir.mkdir(parents=True, exist_ok=True)
+            # Helfer: wartet, bis der Webport frei ist, und startet app.py neu
+            # (Logs im bewährten Ablageort, wie beim Start via Start-Process).
+            helper = (
+                "import socket,subprocess,sys,time\n"
+                f"port={port}\n"
+                "for _ in range(240):\n"
+                "    s=socket.socket()\n"
+                "    try:\n"
+                "        s.bind(('127.0.0.1',port)); s.close(); break\n"
+                "    except OSError:\n"
+                "        s.close(); time.sleep(0.5)\n"
+                f"out=open(r'{logdir / 'app.out.log'}','ab')\n"
+                f"err=open(r'{logdir / 'app.err.log'}','ab')\n"
+                f"subprocess.Popen([sys.executable, r'{BASE / 'app.py'}'],"
+                f" cwd=r'{BASE}', stdout=out, stderr=err)\n"
+            )
+            kw: dict = {"close_fds": True}
+            if os.name == "nt":
+                # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP: überlebt das Ende
+                # dieses Prozesses und hängt an keiner Konsole
+                kw["creationflags"] = 0x00000008 | 0x00000200
+            else:
+                kw["start_new_session"] = True
+            subprocess.Popen([sys.executable, "-c", helper], **kw)
+    except Exception as exc:                           # noqa: BLE001
+        print(f"[restart] Helfer-Start fehlgeschlagen: {exc} — beende trotzdem")
+    with _lock:                            # keine halbe DB-Transaktion abschneiden
+        os._exit(0)
+
+
+# ------------------------------------------------------------------ CSV-Export
+@app.get("/api/export.csv")
+def api_export(scope: str = "total", res: str = "day",
+               start: str = "", end: str = ""):
+    """Historische Verbrauchsdaten als CSV (deutsches Excel: ';' + Dezimalkomma).
+
+    scope: total | dept:<id> | sensor:<id>   res: hour | day
+    start/end: YYYY-MM-DD (inklusive); Standard: letzte 30 Tage.
+    Read-only und damit wie das Dashboard ohne Login nutzbar.
+    """
+    if res not in ("hour", "day"):
+        return JSONResponse({"ok": False, "error": "res must be hour|day"}, status_code=400)
+    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    try:
+        d_end = datetime.strptime(end, "%Y-%m-%d") if end else today
+        d_start = datetime.strptime(start, "%Y-%m-%d") if start else d_end - timedelta(days=29)
+    except ValueError:
+        return JSONResponse({"ok": False, "error": "bad date (YYYY-MM-DD)"}, status_code=400)
+    if d_start > d_end:
+        d_start, d_end = d_end, d_start
+    if (d_end - d_start).days > 400:
+        return JSONResponse({"ok": False, "error": "range too large (max 400 days)"},
+                            status_code=400)
+
+    if scope == "total":
+        sel = [s for s in SENSORS.values() if s.get("gas")]
+    elif scope.startswith("dept:"):
+        did = scope[5:]
+        sel = [s for s in SENSORS.values() if s.get("gas") and s.get("dept") == did]
+    elif scope.startswith("sensor:"):
+        sid = scope[7:]
+        sel = [SENSORS[sid]] if sid in SENSORS else []
+    else:
+        return JSONResponse({"ok": False, "error": "bad scope"}, status_code=400)
+    if not sel:
+        return JSONResponse({"ok": False, "error": "no sensors in scope"}, status_code=404)
+
+    ts_from = int(d_start.timestamp())
+    ts_to = int((d_end + timedelta(days=1)).timestamp())
+    per_sensor: dict[str, dict[int, float]] = {}
+    with db() as c:
+        for s in sel:
+            rows = c.execute(
+                "SELECT hour_ts, nl FROM hourly WHERE machine=? AND hour_ts>=? AND hour_ts<?",
+                (s["id"], ts_from, ts_to)).fetchall()
+            per_sensor[s["id"]] = {ts: nl for ts, nl in rows}
+
+    def de(v: float, d: int) -> str:
+        return f"{v:.{d}f}".replace(".", ",")
+
+    def field(v: str) -> str:
+        v = str(v)
+        return '"' + v.replace('"', '""') + '"' if any(ch in v for ch in ';"\n') else v
+
+    gases = CONFIG.get("gases", {})
+    lines = ["Zeit;SensorID;Name;Gas;Abteilung;Verbrauch_Nl;Verbrauch_m3;Kosten_EUR"]
+    step = timedelta(hours=1) if res == "hour" else timedelta(days=1)
+    fmt = "%Y-%m-%d %H:%M" if res == "hour" else "%Y-%m-%d"
+    t = d_start
+    while t < d_end + timedelta(days=1):
+        for s in sel:
+            if res == "hour":
+                nl = per_sensor[s["id"]].get(int(t.timestamp()), 0.0)
+            else:
+                nl = sum(per_sensor[s["id"]].get(int((t + timedelta(hours=h)).timestamp()), 0.0)
+                         for h in range(24))
+            gas = s.get("gas") or ""
+            price = gases.get(gas, {}).get("price_per_m3", 0) if gas else 0
+            lines.append(";".join([
+                t.strftime(fmt), field(s["id"]), field(s.get("name", s["id"])),
+                field(gases.get(gas, {}).get("name", gas) if gas else "—"),
+                field(dept_name(s.get("dept"))),
+                de(nl, 1), de(nl / 1000, 3), de(nl / 1000 * price, 2),
+            ]))
+        t += step
+
+    slug = scope.replace(":", "-")
+    fname = f"gas-export_{slug}_{d_start:%Y-%m-%d}_{d_end:%Y-%m-%d}_{res}.csv"
+    body = "﻿" + "\r\n".join(lines) + "\r\n"     # BOM: Excel erkennt UTF-8
+    from fastapi.responses import Response
+    return Response(content=body, media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+# -------------------------------------------------------------------- Backup
+def _backup_once() -> bool:
+    """Tagesbackup von DB + Registry + Konfiguration; rotiert alte Stände."""
+    bk = CONFIG.get("backup", {})
+    if not bk.get("enabled", True):
+        return False
+    bdir = BASE / "backups"
+    tgt = bdir / datetime.now().strftime("%Y-%m-%d")
+    if tgt.exists():
+        return False
+    tgt.mkdir(parents=True, exist_ok=True)
+    try:
+        with _lock:
+            src = sqlite3.connect(DB_PATH)
+            dst = sqlite3.connect(tgt / DB_PATH.name)
+            src.backup(dst)                # konsistent trotz WAL
+            dst.close(); src.close()
+        for f in ("sensors.json", "config.json"):
+            if (BASE / f).exists():
+                shutil.copyfile(BASE / f, tgt / f)
+    except Exception as exc:                           # noqa: BLE001
+        print(f"[backup] fehlgeschlagen: {exc}")
+        return False
+    keep = max(1, int(bk.get("keep_days", 30)))
+    dirs = sorted(d for d in bdir.iterdir()
+                  if d.is_dir() and re.match(r"^\d{4}-\d{2}-\d{2}$", d.name))
+    for d in dirs[:-keep]:
+        shutil.rmtree(d, ignore_errors=True)
+    print(f"[backup] {tgt.name} angelegt ({len(dirs)} Stände, behalte {keep})")
+    return True
+
+
+def _backup_loop() -> None:
+    while True:
+        try:
+            _backup_once()
+        except Exception as exc:                       # noqa: BLE001
+            print(f"[backup] Loop-Fehler: {exc}")
+        time.sleep(3600)
 
 
 # Statisches Frontend unter / ausliefern
@@ -1053,9 +1515,11 @@ app.mount("/", StaticFiles(directory=str(FRONTEND), html=True), name="frontend")
 
 if __name__ == "__main__":
     load_sensors()
+    _ensure_auth_secret()
     _migrate_legacy_db()
     init_db()
     start_mqtt()
     threading.Thread(target=_alarm_loop, daemon=True).start()
+    threading.Thread(target=_backup_loop, daemon=True).start()
     port = int(os.environ.get("PORT", CONFIG.get("port", 8000)))
     uvicorn.run(app, host=CONFIG.get("host", "0.0.0.0"), port=port)

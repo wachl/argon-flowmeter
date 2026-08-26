@@ -30,7 +30,8 @@ wird im Dashboard zugeordnet.
 3. **Dashboard**: `cd dashboard/backend && python app.py` → http://127.0.0.1:8000.
    Neue Geräte erscheinen als „nicht zugeordnet“ (inkl. Link auf ihr Webinterface) und
    werden **im Dashboard** benannt und Gas/Abteilung zugewiesen (Sensoren-Button);
-   Broker/Preise/Alarm-Schwellen über ⚙.
+   Broker/Preise/Alarm-Schwellen über ⚙. Ohne Anmeldung ist das Dashboard nur lesend
+   (sobald in ⚙ ein Login-Passwort gesetzt ist); UI Deutsch/Englisch.
 
 ## Status
 
@@ -42,5 +43,11 @@ wird im Dashboard zugeordnet.
   am eingebetteten Broker (Migration siehe `firmware/README.md`).
 - ✅ Dashboard: Ingest für beide Topic-Schemata (`iwb/gas/` neu, `iwb/argon/` Bestand),
   Sensor-Manager + ⚙-Einstellungen komplett im Frontend.
+- ✅ Produktivbetrieb-Features: Benutzer-Ebene (ohne Login nur lesend), UI DE/EN,
+  CSV-Export (Anlage/Abteilung/gesamt), Sensor-Notizen, Offline-Alarme mit
+  Auto-Auflösung, Alarm-Historie, MQTT-Zugangsdaten-Abgleich mit
+  `firmware/secrets.yaml`, tägliches Backup, Backend-Neustart per Klick.
 - ⏳ Offen pro Anlage: SFAH-Variante/Max-Durchfluss → SP, Normbedingung, reale
   Anlagennamen (im Dashboard zuweisbar).
+- ⏳ Offen Betrieb: Autostart nach Windows-Reboot (Taskplaner/NSSM) für die
+  Produktivinstanz einrichten.

@@ -3,6 +3,9 @@
   "port": 8000,
   "db_file": "gas.db",
   "stale_seconds": 120,
+  "offline_alarm_minutes": 15,
+  "admin_password": "",
+  "backup": { "enabled": true, "keep_days": 30 },
   "gases": {
     "argon": { "name": "Argon", "price_per_m3": 120 },
     "nitrogen": { "name": "Nitrogen", "price_per_m3": 40 }
@@ -22,7 +25,6 @@
     "embedded": true,
     "bind": "0.0.0.0",
     "port": 1883,
-    "allow_anonymous": true,
     "broker": "127.0.0.1",
     "username": "gas",
     "password": "CHANGE_ME"

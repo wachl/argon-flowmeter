@@ -1,7 +1,8 @@
 /* Gas Monitoring – Frontend (vanilla, kein Build-Schritt).
    Daten live aus dem Backend (GET /api/data), gas-neutral (Argon + Stickstoff).
-   Konfiguration komplett im Dashboard: Sensor-Manager (Zuordnung, Schwellwerte,
-   Zähler-Reset) + ⚙-Einstellungen (Broker, Preise, Standard-Schwellen).
+   Zwei Ebenen: ohne Login komplett lesbar (inkl. Export), alle Änderungen
+   (Sensoren, Einstellungen, Firmware, Quittieren, Neustart) hinter dem Login.
+   Sprache DE/EN über die I18N-Tabelle unten; UI-Präferenzen in localStorage.
    Modals leben in einer eigenen Ebene (#modal-layer) und überleben den 5-s-Poll. */
 (() => {
   "use strict";
@@ -12,13 +13,242 @@
     technical:{'--bg':'#0b0e0c','--bg2':'#0f130f','--panel':'#0e120f','--panel2':'#121712','--border':'#26302a','--text':'#d7e3da','--dim':'#88a092','--mute':'#5d7165','--accent':'#7dffab','--accent2':'#ffc56b','--good':'#7dffab','--warn':'#ffc56b','--danger':'#ff8472','--grid':'rgba(125,255,171,0.09)','--stroke':'#7dffab','--onacc':'#04140b','--shadow':'none','--radius':'3px','--fontsans':"'JetBrains Mono',monospace",'--fontnum':"'JetBrains Mono',monospace",'--bgimg':'repeating-linear-gradient(0deg, rgba(125,255,171,0.022) 0 1px, transparent 1px 27px), repeating-linear-gradient(90deg, rgba(125,255,171,0.022) 0 1px, transparent 1px 27px)'}
   };
 
-  const S = {                       // UI-State
-    range:'7d', unit:'m3', theme:'control', gas:'all',
-    scope:{type:'total'}, sortKey:'cons', sortDir:'desc', hover:-1, now:Date.now(),
-    pollError:false, lastOk:null
+  // ------------------------------------------------------------------- i18n
+  const L = {
+  de: {
+    subtitle:'iwb · TUM — Gasverbrauch Produktionshalle',
+    lblGas:'GAS', lblRange:'ZEITRAUM', lblUnit:'EINHEIT', lblTheme:'THEME', lblLang:'SPRACHE',
+    all:'Alle', themeLight:'Hell',
+    btnSensors:'Sensoren', btnDevice:'＋ Gerät', btnExport:'Export', btnLogin:'Anmelden', btnLogout:'Abmelden',
+    titleSensors:'Sensoren verwalten', titleDevice:'Neues Gerät flashen · Firmware bauen · MAC auslesen', titleSettings:'Einstellungen', titleExport:'Historische Daten als CSV exportieren',
+    brokerOk:'BROKER OK', brokerDown:'BROKER GETRENNT', mqttOnline:'MQTT ONLINE', noData:'KEINE DATEN',
+    pollError:'Backend nicht erreichbar — Anzeige zeigt den Stand von {0}.',
+    unassigned1:'1 nicht zugeordneter Sensor', unassignedN:'{0} nicht zugeordnete Sensoren',
+    unassignedGo:' — hier klicken und Gas/Abteilung zuweisen.', unassignedInfo:' — Zuordnung nach Anmeldung möglich.',
+    r24:'24 h', r7:'7 Tage', r30:'30 Tage',
+    rl24:'letzte 24 h', rl7:'letzte 7 Tage', rl30:'letzte 30 Tage',
+    kCons:'Verbrauch · {0}', kConsSub:'{0} € gesamt', kCost:'Gas-Kosten', kCostSub:'{0} m³ · {1}', allGases:'alle Gase',
+    kLive:'Live-Durchfluss', kLiveSub:'{0} von {1} aktiv', kAlarms:'Aktive Alarme', kAlarmsSub:'{0} kritisch · {1} Warnung',
+    trend:'Verbrauchs-Trend', allDepts:'Alle Abteilungen', plantWide:'Werksweit', nSensors:'{0} Sensoren',
+    alarmsPanel:'Aktive Alarme', alarmsNone:'Keine aktiven Alarme.', history:'Historie', ackTip:'quittieren',
+    byDept:'Nach Abteilung',
+    alOver:'Mehrverbrauch', alOverDetail:'+{0}% über Erwartungswert',
+    alLeak:'Leerlauf / Leck', alLeakDetail:'Durchfluss während Stillstand',
+    alDown:'Downtime-Verbrauch', alDownDetail:'Verbrauch im Stillstands-Fenster',
+    alOffline:'Sensor offline', alOfflineDetail:'keine Daten vom Gerät',
+    thStatus:'Status', thSensor:'Sensor', thGas:'Gas', thDept:'Abteilung', thFlow:'Live Nl/min', thCons:'Verbrauch', thCost:'Kosten', thTrend:'Trend', th14d:'14 Tage',
+    stAlert:'ALARM', stRun:'AKTIV', stIdle:'IDLE', stOff:'OFFLINE',
+    sensorsUnits:'{0} Anlagen', tableHintAdmin:'Zeile klicken fokussiert den Chart · ✎ öffnet die Konfiguration', tableHint:'Zeile klicken fokussiert den Chart',
+    never:'nie', agoS:'vor {0} s', agoM:'vor {0} min', agoH:'vor {0} h', agoD:'vor {0} d',
+    online:'online', offline:'offline', notAssigned:'nicht zugeordnet',
+    noSensorsYet:'Noch keine Sensoren. Sobald ein Gerät publiziert, erscheint es hier automatisch.',
+    depts:'Abteilungen', noDepts:'Noch keine Abteilungen.', newDept:'Neue Abteilung …', deptMissing:'Name der Abteilung fehlt',
+    deptDelTip:'Abteilung löschen', deptDelConfirm:'Abteilung löschen? Zugeordnete Sensoren verlieren nur die Zuordnung.',
+    deptCreated:'Abteilung angelegt ✓', deptDeleted:'Abteilung gelöscht ✓',
+    pickSensor:'Sensor links auswählen,<br>um ihn zu konfigurieren.',
+    device:'Gerät', spValue:'SP-Wert', deviceTip:'Geräte-Webinterface öffnen',
+    devHint:'SP-Wert und Anlagen-ID werden im Geräte-Webinterface (Link oben) eingestellt.',
+    otaBtn:'Firmware-Update (OTA)', otaIdle:'Gerät startet neu, Zähler bleibt erhalten', otaRunning:'läuft … {0}', otaStarted:'OTA gestartet …',
+    otaDone:'OTA abgeschlossen ✓ — Gerät startet neu', otaFail:'OTA fehlgeschlagen (Log unter „＋ Gerät“)',
+    otaConfirm:'Firmware-Update (OTA) auf „{0}“ ({1}) starten?\nDas Gerät startet neu; Zähler und Einstellungen bleiben erhalten.',
+    total:'Gesamt', name:'Anzeigename', gasSel:'Gas', deptSel:'Abteilung', noGas:'— kein Gas (nicht zugeordnet) —', noDept:'— keine Abteilung —',
+    note:'Notiz', notePlaceholder:'z. B. „Flasche getauscht 26.08.“ — bleibt gespeichert',
+    leakCustom:'Leck-Schwellen individuell (Standard: {0}–{1} Nl/min)', leakFrom:'Leck ab', leakTo:'bis', leakUnit:'Nl/min (darüber gilt die Anlage als aktiv)',
+    dtCustom:'Downtime-Regel individuell (sonst Standard aus ⚙)', dtOn:'Überwachung aktiv', dtMax:'max. Verbrauch im Fenster',
+    dtNoWin:'Keine Fenster definiert.', dtAddWin:'＋ Fenster hinzufügen', dtDelWin:'Fenster entfernen',
+    dtHint:'Alarm, wenn der Verbrauch in einem Fenster das Maximum überschreitet. Zeiten HH:MM, Ende 24:00 = Mitternacht.',
+    save:'Speichern', saved:'Gespeichert ✓', err:'Fehler: ', deleted:'Gelöscht ✓',
+    resetCounter:'Zähler nullen', resetTip:'Kommando an das Gerät: Gesamtzähler nullen',
+    resetConfirm:'Gesamtzähler von „{0}“ ({1}) wirklich auf 0 setzen?', resetSent:'Reset-Kommando gesendet ✓',
+    delSensor:'Sensor löschen', delConfirm:'Sensor „{0}“ ({1}) aus der Registry löschen?\nHistorie bleibt erhalten; ein aktives Gerät registriert sich neu.',
+    // Einstellungen
+    restartNeeded:'Broker-Änderungen gespeichert — sie greifen erst nach einem Backend-Neustart.',
+    mqttBroker:'MQTT-Broker', chBrokerRun:'Broker läuft', chBrokerStop:'Broker gestoppt', chBrokerOff:'Broker aus',
+    chIngestOk:'Ingest verbunden', chIngestNo:'Ingest getrennt', chAuthOn:'Geräte-Login aktiv', chAuthOff:'offen (kein Passwort)',
+    embedded:'Eingebetteten Broker verwenden (Geräte verbinden sich mit der LAN-IP dieses PCs)',
+    bind:'Bind-Adresse', port:'Port', user:'Benutzer', password:'Passwort', extBroker:'Externer Broker (Host/IP)',
+    authHint:'Benutzer + Passwort gesetzt = Geräte müssen sich anmelden · leer = offen.',
+    secretsOk:'✓ firmware/secrets.yaml stimmt überein — Builds erhalten diese Zugangsdaten.',
+    secretsDiff:'⚠ firmware/secrets.yaml weicht ab — wird beim Speichern automatisch angeglichen.',
+    secretsMissing:'⚠ firmware/secrets.yaml fehlt — vor dem ersten Firmware-Build anlegen (Vorlage: secrets.yaml.example).',
+    secretsBroker:'Broker-IP in den Geräten (secrets.yaml): {0} · LAN-IP dieses PCs: {1}',
+    showPw:'Passwort anzeigen', hidePw:'Passwort verbergen',
+    prices:'Preise & Allgemein', priceOf:'{0} · €/m³', staleAfter:'Offline nach (s ohne Daten)', offlineAlarm:'Offline-Alarm nach (min · 0 = aus)',
+    backupOn:'Tägliches Backup (DB + Konfiguration)', backupKeep:'aufbewahren (Tage)',
+    defaults:'Standard-Schwellwerte (gelten, wenn ein Sensor keine eigenen hat)', defaultDt:'Standard-Downtime',
+    loginBox:'Dashboard-Login', loginOffHint:'Kein Login-Passwort gesetzt — jeder kann alles ändern. Passwort setzen schaltet den Nur-Lesen-Modus für Unangemeldete ein.',
+    loginOnHint:'Login aktiv: ohne Anmeldung ist das Dashboard nur lesbar.',
+    loginPw:'Login-Passwort', loginPwPh:'••• (unverändert)', loginDisable:'Login deaktivieren',
+    loginDisableConfirm:'Login wirklich deaktivieren? Danach kann jeder im Netz alles ändern.',
+    backendBox:'Backend', restartBtn:'Backend neu starten',
+    restartConfirm:'Backend jetzt neu starten? Das Dashboard ist für ca. 10 s nicht erreichbar.',
+    restarting:'Backend startet neu …', backOnline:'Backend wieder erreichbar ✓', restartTimeout:'Backend meldet sich nicht zurück — Konsole am Dashboard-PC prüfen.',
+    saveHint:'Preise/Schwellen greifen sofort · Broker-Änderungen nach Neustart',
+    // Flasher
+    serialHint:'USB-Flashen & MAC-Auslesen gehen nur in <b>Chrome/Edge</b> direkt am Dashboard-PC über <span style="font-family:var(--fontnum)">http://localhost:8000</span>. Alternative: <span style="font-family:var(--fontnum)">esphome run gas-flowmeter.yaml</span> im firmware/-Ordner.',
+    howto:'So kommt ein neues Gerät in die Messung',
+    step1:'Unten prüfen, ob ein aktueller <b>Firmware-Build</b> vorhanden ist — sonst „Firmware bauen“ (einmal pro Firmware-Stand).',
+    step2:'ESP32-POE2 per <b>USB-C an diesen PC</b> anschließen. <b style="color:var(--danger)">⚠ Niemals USB und PoE gleichzeitig</b> — das Board ist nicht galvanisch isoliert!',
+    step3:'„<b>Firmware flashen (USB)</b>“ klicken → seriellen Port wählen → Installation abwarten. Bei einem fabrikneuen Board „Erase device“ mitwählen.',
+    step4:'„<b>MAC-Adresse auslesen</b>“ klicken (gleiche USB-Verbindung): das Board zeigt seine <b>Ethernet-MAC</b> — kopieren.',
+    step5:'MAC bei der <b>IT zur Netzwerk-Freischaltung</b> einreichen (<b>⏱ bis zu 2 Arbeitstage</b>; die Firmware zeigt die MAC jederzeit wieder an).',
+    step6:'Nach der Freischaltung: USB trennen, Gerät per <b>PoE</b> anschließen → es erscheint unter „Sensoren“ als <b>„nicht zugeordnet“</b>. Dort Name/Gas/Abteilung zuweisen; im Geräte-Webinterface (IP-Link) den <b>SP-Wert</b> und optional eine Anlagen-ID setzen.',
+    step7:'Festo-Sensor gemäß Anleitung (§3 Verdrahtung, §4 Parametrierung) anschließen — SP am Sensor und SP-Wert im Gerät müssen exakt übereinstimmen.',
+    fwBox:'Firmware-Build (gilt für alle Geräte)', fwBuild:'Firmware bauen',
+    fwFrom:'Build vom <b style="color:var(--text)">{0}</b> · {1} KB', fwNone:'<b style="color:var(--warn)">noch kein Build vorhanden</b> — erst „Firmware bauen“ klicken',
+    fwRunning:'⏳ {0} läuft …', fwOkJob:'✓ letzter Job ({0}) erfolgreich', fwFailJob:'✗ letzter Job ({0}) fehlgeschlagen',
+    fwNoApi:'Firmware-Status nicht ladbar — läuft das Backend auf dem Dashboard-PC?',
+    flashBox:'Erstflash per USB', flashBtn:'Firmware flashen (USB)', flashModFail:'Flash-Modul (vendor/esp-web-tools) nicht ladbar.', flashModLoad:'Flash-Modul lädt …',
+    flashOtaHint:'Updates verbundener Geräte: „Sensoren“ → Gerät → „Firmware-Update (OTA)“.',
+    macBox:'MAC-Adresse auslesen (für die IT-Freischaltung)', macBtn:'MAC-Adresse auslesen (USB)', macActive:'Konsole aktiv …', macStop:'Stopp',
+    macHint:'Liest die USB-Konsole des geflashten Boards; die MAC steht später auch im Sensor-Manager.',
+    macCopy:'kopieren', macCopied:'MAC kopiert ✓', macCopyFail:'Kopieren fehlgeschlagen: ', macSubmit:'→ diese Ethernet-MAC bei der IT zur Freischaltung einreichen',
+    macWait:'— warte auf Ausgabe (Board wird resettet) —', serialErr:'Serielle Verbindung: ', serialLost:'[Verbindung getrennt: {0}]',
+    jobBuild:'Build', jobOta:'OTA → {0}', buildRunningErr:'es läuft bereits ein Job',
+    // Export
+    exScope:'Umfang', exTotal:'Gesamt (alle zugeordneten Anlagen)', exDept:'Abteilung: {0}', exSensor:'Anlage: {0}',
+    exRes:'Auflösung', exDay:'Tag', exHour:'Stunde', exFrom:'Von', exTo:'Bis', exGo:'CSV herunterladen',
+    exHint:'Semikolon-getrennt mit Dezimalkomma — öffnet direkt in (deutschem) Excel. Spalten: Zeit, Sensor, Gas, Abteilung, Nl, m³, €.',
+    // Alarm-Historie
+    titleHist:'Alarm-Historie', histRaised:'Aufgetreten', histType:'Typ', histLevel:'Stufe', histValue:'Wert', histState:'Status',
+    histActive:'aktiv', histAck:'quittiert {0}', histAuto:'auto aufgelöst {0}', histNone:'Keine Alarme aufgezeichnet.',
+    lvWarn:'Warnung', lvCrit:'kritisch',
+    // Login
+    titleLogin:'Anmelden', loginInfo:'Ohne Anmeldung ist das Dashboard nur lesbar.', loginBtn:'Anmelden', loginWrong:'Falsches Passwort',
+    loginRequired:'Anmeldung erforderlich', loginFirst:'Bitte zuerst anmelden.',
+    regLoadFail:'Sensor-Liste nicht ladbar: ', cfgLoadFail:'Konfiguration nicht ladbar: ', histLoadFail:'Historie nicht ladbar: ',
+    waiting:'Warte auf Daten vom Backend …'
+  },
+  en: {
+    subtitle:'iwb · TUM — Shopfloor Gas Telemetry',
+    lblGas:'GAS', lblRange:'RANGE', lblUnit:'UNIT', lblTheme:'THEME', lblLang:'LANGUAGE',
+    all:'All', themeLight:'Light',
+    btnSensors:'Sensors', btnDevice:'＋ Device', btnExport:'Export', btnLogin:'Sign in', btnLogout:'Sign out',
+    titleSensors:'Manage sensors', titleDevice:'Flash new device · build firmware · read MAC', titleSettings:'Settings', titleExport:'Export historical data as CSV',
+    brokerOk:'BROKER OK', brokerDown:'BROKER DOWN', mqttOnline:'MQTT ONLINE', noData:'NO DATA',
+    pollError:'Backend unreachable — showing data as of {0}.',
+    unassigned1:'1 unassigned sensor', unassignedN:'{0} unassigned sensors',
+    unassignedGo:' — click here to assign gas/department.', unassignedInfo:' — sign in to assign.',
+    r24:'24 h', r7:'7 days', r30:'30 days',
+    rl24:'last 24 hours', rl7:'last 7 days', rl30:'last 30 days',
+    kCons:'Consumption · {0}', kConsSub:'{0} € total', kCost:'Gas cost', kCostSub:'{0} m³ · {1}', allGases:'all gases',
+    kLive:'Live flow', kLiveSub:'{0} of {1} active', kAlarms:'Active alarms', kAlarmsSub:'{0} critical · {1} warning',
+    trend:'Consumption trend', allDepts:'All departments', plantWide:'Plant-wide', nSensors:'{0} sensors',
+    alarmsPanel:'Active alarms', alarmsNone:'No active alarms.', history:'History', ackTip:'acknowledge',
+    byDept:'By department',
+    alOver:'Over-consumption', alOverDetail:'+{0}% above expectation',
+    alLeak:'Idle flow / leak', alLeakDetail:'Flow while machine is idle',
+    alDown:'Downtime consumption', alDownDetail:'Consumption inside downtime window',
+    alOffline:'Sensor offline', alOfflineDetail:'no data from device',
+    thStatus:'Status', thSensor:'Sensor', thGas:'Gas', thDept:'Department', thFlow:'Live Nl/min', thCons:'Consumption', thCost:'Cost', thTrend:'Trend', th14d:'14-day',
+    stAlert:'ALERT', stRun:'RUNNING', stIdle:'IDLE', stOff:'OFFLINE',
+    sensorsUnits:'{0} units', tableHintAdmin:'Click a row to focus the chart · ✎ opens configuration', tableHint:'Click a row to focus the chart',
+    never:'never', agoS:'{0} s ago', agoM:'{0} min ago', agoH:'{0} h ago', agoD:'{0} d ago',
+    online:'online', offline:'offline', notAssigned:'unassigned',
+    noSensorsYet:'No sensors yet. As soon as a device publishes, it appears here automatically.',
+    depts:'Departments', noDepts:'No departments yet.', newDept:'New department …', deptMissing:'Department name missing',
+    deptDelTip:'Delete department', deptDelConfirm:'Delete department? Assigned sensors only lose the assignment.',
+    deptCreated:'Department created ✓', deptDeleted:'Department deleted ✓',
+    pickSensor:'Select a sensor on the left<br>to configure it.',
+    device:'Device', spValue:'SP value', deviceTip:'Open device web UI',
+    devHint:'SP value and machine ID are set in the device web UI (link above).',
+    otaBtn:'Firmware update (OTA)', otaIdle:'device reboots, counter is kept', otaRunning:'running … {0}', otaStarted:'OTA started …',
+    otaDone:'OTA finished ✓ — device is rebooting', otaFail:'OTA failed (log under “＋ Device”)',
+    otaConfirm:'Start firmware update (OTA) on “{0}” ({1})?\nThe device reboots; counter and settings are kept.',
+    total:'Total', name:'Display name', gasSel:'Gas', deptSel:'Department', noGas:'— no gas (unassigned) —', noDept:'— no department —',
+    note:'Note', notePlaceholder:'e.g. “bottle swapped Aug 26” — stays saved',
+    leakCustom:'Custom leak thresholds (default: {0}–{1} Nl/min)', leakFrom:'Leak from', leakTo:'to', leakUnit:'Nl/min (above = machine active)',
+    dtCustom:'Custom downtime rule (else default from ⚙)', dtOn:'Monitoring active', dtMax:'max. consumption in window',
+    dtNoWin:'No windows defined.', dtAddWin:'＋ Add window', dtDelWin:'Remove window',
+    dtHint:'Alarm when consumption within a window exceeds the maximum. Times HH:MM, end 24:00 = midnight.',
+    save:'Save', saved:'Saved ✓', err:'Error: ', deleted:'Deleted ✓',
+    resetCounter:'Reset counter', resetTip:'Command to the device: zero the total counter',
+    resetConfirm:'Really reset the total counter of “{0}” ({1}) to 0?', resetSent:'Reset command sent ✓',
+    delSensor:'Delete sensor', delConfirm:'Delete sensor “{0}” ({1}) from the registry?\nHistory is kept; an active device re-registers.',
+    restartNeeded:'Broker changes saved — they take effect after a backend restart.',
+    mqttBroker:'MQTT broker', chBrokerRun:'Broker running', chBrokerStop:'Broker stopped', chBrokerOff:'Broker off',
+    chIngestOk:'Ingest connected', chIngestNo:'Ingest disconnected', chAuthOn:'Device auth on', chAuthOff:'open (no password)',
+    embedded:'Use embedded broker (devices connect to this PC’s LAN IP)',
+    bind:'Bind address', port:'Port', user:'User', password:'Password', extBroker:'External broker (host/IP)',
+    authHint:'User + password set = devices must log in · empty = open.',
+    secretsOk:'✓ firmware/secrets.yaml matches — builds get these credentials.',
+    secretsDiff:'⚠ firmware/secrets.yaml differs — it will be updated automatically on save.',
+    secretsMissing:'⚠ firmware/secrets.yaml missing — create it before the first firmware build (template: secrets.yaml.example).',
+    secretsBroker:'Broker IP inside the devices (secrets.yaml): {0} · LAN IP of this PC: {1}',
+    showPw:'Show password', hidePw:'Hide password',
+    prices:'Prices & general', priceOf:'{0} · €/m³', staleAfter:'Offline after (s without data)', offlineAlarm:'Offline alarm after (min · 0 = off)',
+    backupOn:'Daily backup (DB + configuration)', backupKeep:'keep (days)',
+    defaults:'Default thresholds (apply unless a sensor overrides them)', defaultDt:'Default downtime',
+    loginBox:'Dashboard login', loginOffHint:'No login password set — anyone can change anything. Setting one makes the dashboard read-only for signed-out users.',
+    loginOnHint:'Login active: without signing in the dashboard is read-only.',
+    loginPw:'Login password', loginPwPh:'••• (unchanged)', loginDisable:'Disable login',
+    loginDisableConfirm:'Really disable login? Anyone on the network can then change anything.',
+    backendBox:'Backend', restartBtn:'Restart backend',
+    restartConfirm:'Restart the backend now? The dashboard will be unavailable for ~10 s.',
+    restarting:'Backend restarting …', backOnline:'Backend back online ✓', restartTimeout:'Backend did not come back — check the console on the dashboard PC.',
+    saveHint:'Prices/thresholds apply immediately · broker changes after restart',
+    serialHint:'USB flashing & MAC reading only work in <b>Chrome/Edge</b> directly on the dashboard PC via <span style="font-family:var(--fontnum)">http://localhost:8000</span>. Alternative: <span style="font-family:var(--fontnum)">esphome run gas-flowmeter.yaml</span> in the firmware/ folder.',
+    howto:'How a new device joins the measurement',
+    step1:'Check below that a current <b>firmware build</b> exists — otherwise click “Build firmware” (once per firmware revision).',
+    step2:'Connect the ESP32-POE2 via <b>USB-C to this PC</b>. <b style="color:var(--danger)">⚠ Never USB and PoE at the same time</b> — the board is not galvanically isolated!',
+    step3:'Click “<b>Flash firmware (USB)</b>” → choose the serial port → wait for the installation. For a brand-new board also select “Erase device”.',
+    step4:'Click “<b>Read MAC address</b>” (same USB connection): the board prints its <b>Ethernet MAC</b> — copy it.',
+    step5:'Submit the MAC to <b>IT for network approval</b> (<b>⏱ up to 2 working days</b>; the firmware shows the MAC again at any time).',
+    step6:'After approval: disconnect USB, connect the device via <b>PoE</b> → it appears under “Sensors” as <b>“unassigned”</b>. Assign name/gas/department there; set the <b>SP value</b> and optionally a machine ID in the device web UI (IP link).',
+    step7:'Wire the Festo sensor per the manual (§3 wiring, §4 parameters) — the SP on the sensor and the SP value in the device must match exactly.',
+    fwBox:'Firmware build (shared by all devices)', fwBuild:'Build firmware',
+    fwFrom:'Build from <b style="color:var(--text)">{0}</b> · {1} KB', fwNone:'<b style="color:var(--warn)">no build yet</b> — click “Build firmware” first',
+    fwRunning:'⏳ {0} running …', fwOkJob:'✓ last job ({0}) succeeded', fwFailJob:'✗ last job ({0}) failed',
+    fwNoApi:'Firmware status not available — is the backend running on the dashboard PC?',
+    flashBox:'First flash via USB', flashBtn:'Flash firmware (USB)', flashModFail:'Flash module (vendor/esp-web-tools) failed to load.', flashModLoad:'Flash module loading …',
+    flashOtaHint:'Updates for connected devices: “Sensors” → device → “Firmware update (OTA)”.',
+    macBox:'Read MAC address (for IT approval)', macBtn:'Read MAC address (USB)', macActive:'Console active …', macStop:'Stop',
+    macHint:'Reads the USB console of the flashed board; the MAC also appears later in the sensor manager.',
+    macCopy:'copy', macCopied:'MAC copied ✓', macCopyFail:'Copy failed: ', macSubmit:'→ submit this Ethernet MAC to IT for approval',
+    macWait:'— waiting for output (board is being reset) —', serialErr:'Serial connection: ', serialLost:'[connection lost: {0}]',
+    jobBuild:'Build', jobOta:'OTA → {0}', buildRunningErr:'a job is already running',
+    exScope:'Scope', exTotal:'Total (all assigned machines)', exDept:'Department: {0}', exSensor:'Machine: {0}',
+    exRes:'Resolution', exDay:'Day', exHour:'Hour', exFrom:'From', exTo:'To', exGo:'Download CSV',
+    exHint:'Semicolon-separated with decimal comma — opens directly in (German) Excel. Columns: time, sensor, gas, department, Nl, m³, €.',
+    titleHist:'Alarm history', histRaised:'Raised', histType:'Type', histLevel:'Level', histValue:'Value', histState:'Status',
+    histActive:'active', histAck:'acknowledged {0}', histAuto:'auto-cleared {0}', histNone:'No alarms recorded.',
+    lvWarn:'warning', lvCrit:'critical',
+    titleLogin:'Sign in', loginInfo:'Without signing in the dashboard is read-only.', loginBtn:'Sign in', loginWrong:'Wrong password',
+    loginRequired:'Sign-in required', loginFirst:'Please sign in first.',
+    regLoadFail:'Sensor list not loadable: ', cfgLoadFail:'Configuration not loadable: ', histLoadFail:'History not loadable: ',
+    waiting:'Waiting for data from the backend …'
+  }};
+  const t = (k, ...a) => {
+    let s = (L[S.lang] && L[S.lang][k]) ?? L.de[k] ?? k;
+    a.forEach((v, i) => { s = s.replace('{' + i + '}', v); });
+    return s;
   };
+
+  // ------------------------------------------------------------------ state
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem('gasUI') || '{}') || {}; } catch (e) {}
+  const S = {
+    range: saved.range || '7d', unit: saved.unit || 'm3', theme: saved.theme || 'control',
+    lang: saved.lang || 'de', gas: 'all',
+    scope: {type: 'total'}, sortKey: 'cons', sortDir: 'desc', hover: -1, now: Date.now(),
+    pollError: false, lastOk: null
+  };
+  function persistUI(){ try{ localStorage.setItem('gasUI', JSON.stringify({range:S.range,unit:S.unit,theme:S.theme,lang:S.lang})); }catch(e){} }
+
+  let TOKEN = '';
+  try { TOKEN = localStorage.getItem('gasToken') || ''; } catch (e) {}
+  const AUTH = {required: false, admin: true, known: false};
+  const isAdmin = () => AUTH.admin;
+  function setToken(tok){ TOKEN = tok || ''; try{ tok ? localStorage.setItem('gasToken', tok) : localStorage.removeItem('gasToken'); }catch(e){} }
+  async function refreshAuth(){
+    try{
+      const r = await fetch('api/auth', {headers: TOKEN ? {'X-Auth': TOKEN} : {}, cache:'no-store'});
+      if(r.ok){ const j = await r.json(); AUTH.required = !!j.required; AUTH.admin = !!j.admin; AUTH.known = true; }
+    }catch(e){}
+  }
+
   let DATA = null;                  // letzte Backend-Antwort (/api/data)
-  let M = null;                     // Modal-State (null | {type:'sensors'|'settings', ...})
+  let M = null;                     // Modal-State
   const root = document.getElementById('root');
   root.innerHTML = '<div id="app"></div><div id="modal-layer"></div>';
   const appEl = document.getElementById('app');
@@ -36,11 +266,12 @@
   const gasName = g => { const x = gasesList().find(z => z.id === g); return x ? x.name : (g || '—'); };
   const gasShort = g => g === 'nitrogen' ? 'N₂' : g === 'argon' ? 'Ar' : (gasName(g));
   const deepCopy = o => JSON.parse(JSON.stringify(o));
+  const numLocale = () => S.lang === 'de' ? 'de-DE' : 'en-GB';
 
   // Sichtbare Sensoren = Gas-Filter angewandt
   const sensors = () => S.gas === 'all' ? allSensors() : allSensors().filter(m => m.gas === S.gas);
 
-  const fmtNum = (n,d) => (n==null||isNaN(n)) ? '—' : Number(n).toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d});
+  const fmtNum = (n,d) => (n==null||isNaN(n)) ? '—' : Number(n).toLocaleString(numLocale(),{minimumFractionDigits:d,maximumFractionDigits:d});
   // Wert in gewählter Einheit für ein Sensor-Gas: Nl -> m³ oder €
   const unitVal = (nl,gas) => S.unit==='m3' ? nl/1000 : nl/1000*priceOf(gas);
   // formatiert einen bereits in der Einheit vorliegenden Wert
@@ -48,18 +279,19 @@
   const fmtM3 = nl => { const v=nl/1000, d=v<10?2:v<100?1:0; return fmtNum(v,d)+' m³'; };
   const fmtEurNl = (nl,gas) => fmtNum(Math.round(nl/1000*priceOf(gas)),0)+' €';
   const axisFmt = v => { if(S.unit==='m3') return fmtNum(v, v<10?1:0); if(v>=1000) return fmtNum(v/1000, v>=10000?0:1)+'k'; return fmtNum(Math.round(v),0); };
-  const ago = ts => { if(!ts) return 'nie'; const s=Math.max(0,Math.round(Date.now()/1000-ts));
-    if(s<60) return 'vor '+s+' s'; if(s<3600) return 'vor '+Math.round(s/60)+' min';
-    if(s<86400) return 'vor '+Math.round(s/3600)+' h'; return 'vor '+Math.round(s/86400)+' d'; };
+  const ago = ts => { if(!ts) return t('never'); const s=Math.max(0,Math.round(Date.now()/1000-ts));
+    if(s<60) return t('agoS',s); if(s<3600) return t('agoM',Math.round(s/60));
+    if(s<86400) return t('agoH',Math.round(s/3600)); return t('agoD',Math.round(s/86400)); };
+  const fmtDT = ts => ts ? new Date(ts*1000).toLocaleString(numLocale(),{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : '—';
 
   const bucketsFor = m => S.range==='24h' ? m.hourly : S.range==='7d' ? m.daily.slice(23) : m.daily;
   const rangeNl = m => bucketsFor(m).reduce((a,b)=>a+b,0);
   const rangeUnit = m => unitVal(rangeNl(m), m.gas);
-  const WD = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  const WD = () => S.lang==='de' ? ['So','Mo','Di','Mi','Do','Fr','Sa'] : ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
   const labelsFor = () => {
     if(S.range==='24h') return Array.from({length:24},(_,i)=>String(i).padStart(2,'0')+':00');
     const ds = refDates().map(ms=>new Date(ms));
-    if(S.range==='7d') return ds.slice(23).map(d=>WD[d.getDay()]);
+    if(S.range==='7d') return ds.slice(23).map(d=>WD()[d.getDay()]);
     return ds.map(d=>d.getDate()+'.'+(d.getMonth()+1));
   };
   const scopeMachines = () => {
@@ -140,14 +372,16 @@
   const seg = (active,val,act,label) =>
     `<button data-action="${act}" data-val="${val}" style="padding:6px 13px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;border:none;font-family:var(--fontnum);background:${active?'var(--accent)':'transparent'};color:${active?'var(--onacc)':'var(--dim)'}">${esc(label)}</button>`;
 
-  const ALERT_META = {
-    over:     {title:'Over-consumption',  detail:v=>'+'+Math.round(v*100)+'% über Erwartungswert', val:v=>'+'+Math.round(v*100)+'%'},
-    leak:     {title:'Idle-flow / leak',  detail:_=>'Fluss während Stillstand',                    val:v=>fmtNum(v,1)+' Nl/min'},
-    downtime: {title:'Downtime-Verbrauch',detail:_=>'Verbrauch im Downtime-Fenster',              val:v=>fmtM3(v)}
-  };
+  const ALERT_META = () => ({
+    over:     {title:t('alOver'),    detail:v=>t('alOverDetail', Math.round(v*100)), val:v=>'+'+Math.round(v*100)+'%'},
+    leak:     {title:t('alLeak'),    detail:_=>t('alLeakDetail'),                    val:v=>fmtNum(v,1)+' Nl/min'},
+    downtime: {title:t('alDown'),    detail:_=>t('alDownDetail'),                    val:v=>fmtM3(v)},
+    offline:  {title:t('alOffline'), detail:_=>t('alOfflineDetail'),                 val:v=>v>=120?fmtNum(v/60,1)+' h':fmtNum(v,0)+' min'}
+  });
 
   function render(){
-    if(!DATA){ appEl.innerHTML=`<div style="padding:40px;font-family:sans-serif;color:#9db0cc">Warte auf Daten vom Backend …</div>`; return; }
+    if(!DATA){ appEl.innerHTML=`<div style="padding:40px;font-family:sans-serif;color:#9db0cc">${esc(t('waiting'))}</div>`; return; }
+    const admin = isAdmin();
     const flat=sensors();
 
     const totalNl=flat.reduce((a,m)=>a+rangeNl(m),0);
@@ -161,22 +395,22 @@
     const critN=al.filter(a=>a.level==='critical').length;
     const warnN=al.length-critN;
 
-    const delChip=t=>{ const c=t>0.5?'var(--danger)':t<-0.5?'var(--good)':'var(--mute)'; return {delta:(t>=0?'+':'')+t.toFixed(0)+'%',deltaColor:c,deltaBg:`color-mix(in srgb,${c} 15%,transparent)`}; };
+    const delChip=tr=>{ const c=tr>0.5?'var(--danger)':tr<-0.5?'var(--good)':'var(--mute)'; return {delta:(tr>=0?'+':'')+tr.toFixed(0)+'%',deltaColor:c,deltaBg:`color-mix(in srgb,${c} 15%,transparent)`}; };
     const cc=delChip(facTrend);
-    const rl = S.range==='24h'?'24 h':S.range==='7d'?'7 days':'30 days';
-    const rangeLabel = S.range==='24h'?'last 24 hours':S.range==='7d'?'last 7 days':'last 30 days';
+    const rl = S.range==='24h'?t('r24'):S.range==='7d'?t('r7'):t('r30');
+    const rangeLabel = S.range==='24h'?t('rl24'):S.range==='7d'?t('rl7'):t('rl30');
 
     const kpis=[
-      Object.assign({label:'Consumption · '+rl,value:fmtM3(totalNl),sub:fmtNum(Math.round(totalCost),0)+' € gesamt',valueColor:'var(--text)'},cc),
-      Object.assign({label:'Gas-Kosten',value:fmtNum(Math.round(totalCost),0)+' €',sub:totalM3.toFixed(0)+' m³ · '+(S.gas==='all'?'alle Gase':gasName(S.gas)),valueColor:'var(--text)'},cc),
-      {label:'Live Flow',value:fmtNum(liveFlow,1)+' Nl/min',sub:activeN+' von '+flat.length+' aktiv',valueColor:'var(--accent2)',delta:'LIVE',deltaColor:'var(--good)',deltaBg:'color-mix(in srgb,var(--good) 15%,transparent)'},
-      {label:'Aktive Alarme',value:String(al.length),sub:critN+' kritisch · '+warnN+' Warnung',valueColor:al.length?'var(--danger)':'var(--good)',delta:al.length?'ATTN':'OK',deltaColor:al.length?'var(--danger)':'var(--good)',deltaBg:`color-mix(in srgb,${al.length?'var(--danger)':'var(--good)'} 15%,transparent)`}
+      Object.assign({label:t('kCons',rl),value:fmtM3(totalNl),sub:t('kConsSub',fmtNum(Math.round(totalCost),0)),valueColor:'var(--text)'},cc),
+      Object.assign({label:t('kCost'),value:fmtNum(Math.round(totalCost),0)+' €',sub:t('kCostSub',totalM3.toFixed(0),S.gas==='all'?t('allGases'):gasName(S.gas)),valueColor:'var(--text)'},cc),
+      {label:t('kLive'),value:fmtNum(liveFlow,1)+' Nl/min',sub:t('kLiveSub',activeN,flat.length),valueColor:'var(--accent2)',delta:'LIVE',deltaColor:'var(--good)',deltaBg:'color-mix(in srgb,var(--good) 15%,transparent)'},
+      {label:t('kAlarms'),value:String(al.length),sub:t('kAlarmsSub',critN,warnN),valueColor:al.length?'var(--danger)':'var(--good)',delta:al.length?'ATTN':'OK',deltaColor:al.length?'var(--danger)':'var(--good)',deltaBg:`color-mix(in srgb,${al.length?'var(--danger)':'var(--good)'} 15%,transparent)`}
     ];
 
     const scopeSeries=seriesForScope(); const scopeTotalUnit=scopeSeries.vals.reduce((a,b)=>a+b,0);
     const sc=delChip(trendPct(scopeMachines()));
-    let scopeLabel='Alle Abteilungen', scopeSub='Werksweit';
-    if(S.scope.type==='dept'){ const d=depts().find(x=>x.id===S.scope.id); if(d){scopeLabel=d.name; scopeSub=flat.filter(m=>m.deptId===d.id).length+' Sensoren';} }
+    let scopeLabel=t('allDepts'), scopeSub=t('plantWide');
+    if(S.scope.type==='dept'){ const d=depts().find(x=>x.id===S.scope.id); if(d){scopeLabel=d.name; scopeSub=t('nSensors',flat.filter(m=>m.deptId===d.id).length);} }
     if(S.scope.type==='machine'){ const m=flat.find(x=>x.id===S.scope.id); if(m){scopeLabel=m.name; scopeSub=m.deptName+' · '+gasName(m.gas);} }
 
     const deptAgg=depts().map(d=>({d, nl:flat.filter(m=>m.deptId===d.id).reduce((a,m)=>a+rangeUnit(m),0)}));
@@ -191,8 +425,9 @@
         <span style="display:block;height:7px;border-radius:4px;background:var(--panel2);overflow:hidden"><span style="display:block;height:100%;border-radius:4px;background:${hasAl?'var(--warn)':'var(--accent)'};width:${Math.round(nl/maxDept*100)}%"></span></span></button>`;
     }).join('');
 
+    const AM=ALERT_META();
     const alertRows = al.length ? al.map(a=>{
-      const meta=ALERT_META[a.type]||{title:a.type,detail:_=>'',val:v=>String(v)};
+      const meta=AM[a.type]||{title:a.type,detail:_=>'',val:v=>String(v)};
       const color=levelColor(a.level);
       return `<div style="display:flex;gap:11px;align-items:stretch;background:var(--panel2);border:1px solid var(--border);border-radius:9px;padding:10px 11px">
         <span style="width:3px;border-radius:3px;background:${color};flex:none"></span>
@@ -202,13 +437,13 @@
             <span style="font-size:11px;font-family:var(--fontnum);font-weight:600;color:${color};flex:none">${esc(meta.val(a.value))}</span></span>
           <span style="display:block;font-size:11.5px;color:var(--dim);font-family:var(--fontnum);margin-top:2px">${esc(a.sensorName+' · '+a.deptName+' · '+gasShort(a.gas))}</span>
           <span style="display:block;font-size:11px;color:var(--mute);margin-top:3px">${esc(meta.detail(a.value))}</span></button>
-        <button data-action="ack" data-id="${a.id}" title="quittieren" style="flex:none;align-self:center;border:1px solid var(--border);background:var(--panel);color:var(--dim);border-radius:6px;padding:4px 8px;font-size:12px;cursor:pointer">✓</button></div>`;
-    }).join('') : `<div style="font-size:12px;color:var(--mute);padding:6px 2px">Keine aktiven Alarme.</div>`;
+        ${admin?`<button data-action="ack" data-id="${a.id}" title="${esc(t('ackTip'))}" style="flex:none;align-self:center;border:1px solid var(--border);background:var(--panel);color:var(--dim);border-radius:6px;padding:4px 8px;font-size:12px;cursor:pointer">✓</button>`:''}</div>`;
+    }).join('') : `<div style="font-size:12px;color:var(--mute);padding:6px 2px">${esc(t('alarmsNone'))}</div>`;
 
     // --- Sensor-Tabelle
     const dir=S.sortDir==='asc'?1:-1;
     let rows=flat.map(m=>{ const consNl=rangeNl(m), cur=machineCurrent(m), tr=trendPct([m]), an=!!m.anomaly;
-      const statusLabel=an?'ALERT':(cur>0.3?'RUNNING':(m.status==='online'?'IDLE':'OFFLINE'));
+      const statusLabel=an?t('stAlert'):(cur>0.3?t('stRun'):(m.status==='online'?t('stIdle'):t('stOff')));
       const statusColor=an?levelColor(m.anomaly.level):(cur>0.3?'var(--good)':'var(--mute)');
       return {m,consNl,cur,tr,an,statusLabel,statusColor}; });
     rows.sort((a,b)=>{ let x,y; switch(S.sortKey){
@@ -218,15 +453,16 @@
       case'status':x=a.an?2:(a.cur>0.3?1:0);y=b.an?2:(b.cur>0.3?1:0);break;
       case'flow':x=a.cur;y=b.cur;break; case'trend':x=a.tr;y=b.tr;break;
       default:x=a.consNl;y=b.consNl; } return (x-y)*dir; });
-    const colDefs=[['status','Status','left'],['name','Sensor','left'],['gas','Gas','left'],['dept','Abteilung','left'],['flow','Live Nl/min','right'],['cons','Verbrauch','right'],['cost','Kosten','right'],['trend','Trend','right']];
+    const colDefs=[['status',t('thStatus'),'left'],['name',t('thSensor'),'left'],['gas',t('thGas'),'left'],['dept',t('thDept'),'left'],['flow',t('thFlow'),'right'],['cons',t('thCons'),'right'],['cost',t('thCost'),'right'],['trend',t('thTrend'),'right']];
     const ths=colDefs.map(c=>{ const arrow=S.sortKey===c[0]?(S.sortDir==='asc'?' ↑':' ↓'):''; return `<th data-action="sort" data-key="${c[0]}" style="text-align:${c[2]};padding:7px 12px;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--mute);font-weight:600;border-bottom:1px solid var(--border);cursor:pointer;white-space:nowrap;user-select:none">${esc(c[1])}${arrow}</th>`; }).join('')
-      + `<th style="text-align:right;padding:7px 12px;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--mute);font-weight:600;border-bottom:1px solid var(--border)">14-day</th>`
-      + `<th style="padding:7px 6px;border-bottom:1px solid var(--border)"></th>`;
+      + `<th style="text-align:right;padding:7px 12px;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--mute);font-weight:600;border-bottom:1px solid var(--border)">${esc(t('th14d'))}</th>`
+      + (admin?`<th style="padding:7px 6px;border-bottom:1px solid var(--border)"></th>`:'');
     const trs=rows.map(r=>{ const m=r.m; const active=S.scope.type==='machine'&&S.scope.id===m.id;
       const anim=r.an?'argblink 1.4s ease-in-out infinite':(r.cur>0.3?'argpulse 2.2s ease-in-out infinite':'none');
+      const noteIco=m.note?` <span title="${esc(m.note)}" style="cursor:help;font-size:12px">📝</span>`:'';
       return `<tr data-action="scope-machine" data-id="${esc(m.id)}" style="cursor:pointer;background:${active?'var(--panel2)':'transparent'};border-bottom:1px solid var(--border)">
         <td style="padding:11px 12px;white-space:nowrap"><span style="display:inline-flex;align-items:center;gap:7px;font-size:11px;font-weight:600;font-family:var(--fontnum);color:${r.statusColor}"><span style="width:8px;height:8px;border-radius:50%;background:${r.statusColor};animation:${anim}"></span>${esc(r.statusLabel)}</span></td>
-        <td style="padding:11px 12px;font-size:13px;font-weight:600;color:var(--text);white-space:nowrap">${esc(m.name)}</td>
+        <td style="padding:11px 12px;font-size:13px;font-weight:600;color:var(--text);white-space:nowrap">${esc(m.name)}${noteIco}</td>
         <td style="padding:11px 12px;font-size:12px;color:var(--dim);white-space:nowrap">${esc(gasShort(m.gas))}</td>
         <td style="padding:11px 12px;font-size:12px;color:var(--dim);white-space:nowrap">${esc(m.deptName)}</td>
         <td style="padding:11px 12px;text-align:right;font-family:var(--fontnum);font-size:12.5px;color:var(--text);white-space:nowrap">${esc(fmtNum(r.cur,1))}</td>
@@ -234,17 +470,27 @@
         <td style="padding:11px 12px;text-align:right;font-family:var(--fontnum);font-size:12.5px;color:var(--dim);white-space:nowrap">${esc(fmtEurNl(r.consNl,m.gas))}</td>
         <td style="padding:11px 12px;text-align:right;font-family:var(--fontnum);font-size:12.5px;font-weight:600;color:${r.tr>0.5?'var(--danger)':r.tr<-0.5?'var(--good)':'var(--mute)'};white-space:nowrap">${r.tr>=0?'▲ ':'▼ '}${esc(Math.abs(r.tr).toFixed(0))}%</td>
         <td style="padding:9px 12px;text-align:right">${sparkSVG(m.daily.slice(16),r.statusColor)}</td>
-        <td style="padding:9px 6px;text-align:center"><button data-action="open-sensors" data-id="${esc(m.id)}" title="Sensor konfigurieren" style="border:1px solid var(--border);background:var(--panel2);color:var(--dim);border-radius:6px;padding:4px 8px;font-size:12px;cursor:pointer">✎</button></td></tr>`;
+        ${admin?`<td style="padding:9px 6px;text-align:center"><button data-action="open-sensors" data-id="${esc(m.id)}" title="${esc(t('titleSensors'))}" style="border:1px solid var(--border);background:var(--panel2);color:var(--dim);border-radius:6px;padding:4px 8px;font-size:12px;cursor:pointer">✎</button></td>`:''}</tr>`;
     }).join('');
 
     const d=new Date(S.now);
-    const clock=d.toLocaleTimeString('en-GB')+' · '+d.toLocaleDateString('en-GB',{day:'2-digit',month:'short'});
+    const clock=d.toLocaleTimeString(numLocale())+' · '+d.toLocaleDateString(numLocale(),{day:'2-digit',month:'short'});
     const brk=DATA.broker||null;
     const mqttOk=brk?brk.ingest_connected:onlineN>0;
-    const brokerLabel=brk?(brk.ingest_connected?'BROKER OK':'BROKER GETRENNT'):(onlineN>0?'MQTT ONLINE':'NO DATA');
-    const gasSegs = seg(S.gas==='all','all','gas','Alle') + gasesList().map(g=>seg(S.gas===g.id,g.id,'gas',g.name)).join('');
+    const brokerLabel=brk?(brk.ingest_connected?t('brokerOk'):t('brokerDown')):(onlineN>0?t('mqttOnline'):t('noData'));
+    const gasSegs = seg(S.gas==='all','all','gas',t('all')) + gasesList().map(g=>seg(S.gas===g.id,g.id,'gas',g.name)).join('');
     const naN=unassigned().length;
     const toolBtn='border:1px solid var(--border);background:var(--panel);color:var(--dim);border-radius:9px;padding:8px 13px;font-size:12.5px;font-weight:600;cursor:pointer';
+
+    const adminBtns = admin ? `
+            <button data-action="open-sensors" style="${toolBtn}">${esc(t('btnSensors'))}${naN?` <span style="color:var(--warn)">(${naN})</span>`:''}</button>
+            <button data-action="open-flasher" style="${toolBtn}" title="${esc(t('titleDevice'))}">${esc(t('btnDevice'))}</button>
+            <button data-action="open-export" style="${toolBtn}">${esc(t('btnExport'))}</button>
+            <button data-action="open-settings" style="${toolBtn};font-size:15px;padding:6px 11px" title="${esc(t('titleSettings'))}">⚙</button>
+            ${AUTH.required?`<button data-action="logout" style="${toolBtn};font-size:11.5px;padding:8px 10px" title="${esc(t('btnLogout'))}">⎋</button>`:''}`
+      : `
+            <button data-action="open-export" style="${toolBtn}">${esc(t('btnExport'))}</button>
+            <button data-action="open-login" style="${toolBtn};color:var(--accent)">${esc(t('btnLogin'))}</button>`;
 
     appEl.innerHTML = `
     <div style="min-height:100vh;background:var(--bg);background-image:var(--bgimg);color:var(--text);font-family:var(--fontsans);padding:18px 22px 30px">
@@ -252,21 +498,20 @@
         <div style="display:flex;align-items:center;gap:13px">
           <div style="width:40px;height:40px;border-radius:10px;background:var(--accent);color:var(--onacc);display:flex;align-items:center;justify-content:center;font-family:var(--fontnum);font-weight:600;font-size:15px">Gas</div>
           <div><div style="font-size:17px;font-weight:600;line-height:1.1">Gas Monitoring</div>
-          <div style="font-size:12px;color:var(--dim);margin-top:2px">iwb · TUM — Shopfloor Gas Telemetry</div></div>
+          <div style="font-size:12px;color:var(--dim);margin-top:2px">${esc(t('subtitle'))}</div></div>
         </div>
         <div style="display:flex;flex-wrap:wrap;gap:16px;align-items:center">
-          <div style="display:flex;flex-direction:column;gap:5px"><span style="font-size:9.5px;letter-spacing:.14em;color:var(--mute);font-weight:600">GAS</span>
+          <div style="display:flex;flex-direction:column;gap:5px"><span style="font-size:9.5px;letter-spacing:.14em;color:var(--mute);font-weight:600">${esc(t('lblGas'))}</span>
             <div style="display:inline-flex;background:var(--panel);border:1px solid var(--border);border-radius:9px;padding:3px;gap:2px">${gasSegs}</div></div>
-          <div style="display:flex;flex-direction:column;gap:5px"><span style="font-size:9.5px;letter-spacing:.14em;color:var(--mute);font-weight:600">RANGE</span>
+          <div style="display:flex;flex-direction:column;gap:5px"><span style="font-size:9.5px;letter-spacing:.14em;color:var(--mute);font-weight:600">${esc(t('lblRange'))}</span>
             <div style="display:inline-flex;background:var(--panel);border:1px solid var(--border);border-radius:9px;padding:3px;gap:2px">${seg(S.range==='24h','24h','range','24 H')}${seg(S.range==='7d','7d','range','7 D')}${seg(S.range==='30d','30d','range','30 D')}</div></div>
-          <div style="display:flex;flex-direction:column;gap:5px"><span style="font-size:9.5px;letter-spacing:.14em;color:var(--mute);font-weight:600">UNIT</span>
+          <div style="display:flex;flex-direction:column;gap:5px"><span style="font-size:9.5px;letter-spacing:.14em;color:var(--mute);font-weight:600">${esc(t('lblUnit'))}</span>
             <div style="display:inline-flex;background:var(--panel);border:1px solid var(--border);border-radius:9px;padding:3px;gap:2px">${seg(S.unit==='m3','m3','unit','m³')}${seg(S.unit==='eur','eur','unit','€')}</div></div>
-          <div style="display:flex;flex-direction:column;gap:5px"><span style="font-size:9.5px;letter-spacing:.14em;color:var(--mute);font-weight:600">THEME</span>
-            <div style="display:inline-flex;background:var(--panel);border:1px solid var(--border);border-radius:9px;padding:3px;gap:2px">${seg(S.theme==='control','control','theme','Control')}${seg(S.theme==='analytics','analytics','theme','Light')}${seg(S.theme==='technical','technical','theme','Mono')}</div></div>
-          <div style="display:flex;gap:8px;align-items:flex-end">
-            <button data-action="open-sensors" style="${toolBtn}" title="Sensoren verwalten">Sensoren${naN?` <span style="color:var(--warn)">(${naN} neu)</span>`:''}</button>
-            <button data-action="open-flasher" style="${toolBtn}" title="Neues Gerät flashen · Firmware bauen · MAC für IT-Freischaltung auslesen">＋ Gerät</button>
-            <button data-action="open-settings" style="${toolBtn};font-size:15px;padding:6px 11px" title="Einstellungen">⚙</button>
+          <div style="display:flex;flex-direction:column;gap:5px"><span style="font-size:9.5px;letter-spacing:.14em;color:var(--mute);font-weight:600">${esc(t('lblTheme'))}</span>
+            <div style="display:inline-flex;background:var(--panel);border:1px solid var(--border);border-radius:9px;padding:3px;gap:2px">${seg(S.theme==='control','control','theme','Control')}${seg(S.theme==='analytics','analytics','theme',t('themeLight'))}${seg(S.theme==='technical','technical','theme','Mono')}</div></div>
+          <div style="display:flex;flex-direction:column;gap:5px"><span style="font-size:9.5px;letter-spacing:.14em;color:var(--mute);font-weight:600">${esc(t('lblLang'))}</span>
+            <div style="display:inline-flex;background:var(--panel);border:1px solid var(--border);border-radius:9px;padding:3px;gap:2px">${seg(S.lang==='de','de','lang','DE')}${seg(S.lang==='en','en','lang','EN')}</div></div>
+          <div style="display:flex;gap:8px;align-items:flex-end">${adminBtns}
           </div>
           <div style="display:flex;flex-direction:column;gap:5px;align-items:flex-end">
             <div style="display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--dim);font-weight:600"><span style="width:8px;height:8px;border-radius:50%;background:${mqttOk?'var(--good)':'var(--danger)'};animation:argpulse 1.8s ease-in-out infinite"></span>${esc(brokerLabel)} · ${onlineN}/${flat.length}</div>
@@ -274,8 +519,10 @@
         </div>
       </header>
 
-      ${S.pollError?`<div style="background:color-mix(in srgb,var(--danger) 14%,transparent);border:1px solid var(--danger);border-radius:var(--radius);padding:9px 14px;margin-bottom:14px;font-size:12.5px;color:var(--danger);font-weight:600">Backend nicht erreichbar — Anzeige zeigt den Stand von ${S.lastOk?new Date(S.lastOk).toLocaleTimeString('de-DE'):'—'}.</div>`:''}
-      ${naN?`<button data-action="open-sensors" style="display:block;width:100%;text-align:left;background:color-mix(in srgb,var(--warn) 12%,transparent);border:1px solid var(--border);border-radius:var(--radius);padding:9px 14px;margin-bottom:14px;font-size:12.5px;color:var(--warn);cursor:pointer;font-family:inherit">${naN} nicht zugeordnete${naN>1?' Sensoren':'r Sensor'} — hier klicken und Gas/Abteilung zuweisen.</button>`:''}
+      ${S.pollError?`<div style="background:color-mix(in srgb,var(--danger) 14%,transparent);border:1px solid var(--danger);border-radius:var(--radius);padding:9px 14px;margin-bottom:14px;font-size:12.5px;color:var(--danger);font-weight:600">${esc(t('pollError', S.lastOk?new Date(S.lastOk).toLocaleTimeString(numLocale()):'—'))}</div>`:''}
+      ${naN?(admin
+        ?`<button data-action="open-sensors" style="display:block;width:100%;text-align:left;background:color-mix(in srgb,var(--warn) 12%,transparent);border:1px solid var(--border);border-radius:var(--radius);padding:9px 14px;margin-bottom:14px;font-size:12.5px;color:var(--warn);cursor:pointer;font-family:inherit">${esc((naN>1?t('unassignedN',naN):t('unassigned1'))+t('unassignedGo'))}</button>`
+        :`<div style="background:color-mix(in srgb,var(--warn) 12%,transparent);border:1px solid var(--border);border-radius:var(--radius);padding:9px 14px;margin-bottom:14px;font-size:12.5px;color:var(--warn)">${esc((naN>1?t('unassignedN',naN):t('unassigned1'))+t('unassignedInfo'))}</div>`):''}
 
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(216px,1fr));gap:14px;margin-bottom:14px">
         ${kpis.map(k=>`<div style="background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);padding:15px 17px">
@@ -291,7 +538,7 @@
           <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start;justify-content:space-between">
             <div>
               <div style="display:flex;align-items:center;gap:9px">
-                <span style="font-size:13px;color:var(--dim);font-weight:600">Verbrauchs-Trend</span>
+                <span style="font-size:13px;color:var(--dim);font-weight:600">${esc(t('trend'))}</span>
                 <span style="font-size:11px;font-family:var(--fontnum);color:var(--mute)">· ${esc(rangeLabel)}</span>
                 ${S.scope.type!=='total'?`<button data-action="reset-scope" style="font-size:11px;font-family:var(--fontnum);border:1px solid var(--border);background:var(--panel2);color:var(--dim);border-radius:20px;padding:3px 10px;cursor:pointer">✕ ${esc(scopeLabel)}</button>`:''}
               </div>
@@ -308,13 +555,15 @@
         <div style="flex:1 1 320px;display:flex;flex-direction:column;gap:14px;min-width:0">
           <div style="background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);padding:15px 17px">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-              <span style="font-size:13px;font-weight:600;color:var(--text)">Aktive Alarme</span>
-              <span style="font-size:11px;font-family:var(--fontnum);font-weight:600;color:var(--danger);background:color-mix(in srgb,var(--danger) 15%,transparent);padding:2px 9px;border-radius:20px">${al.length}</span></div>
+              <span style="font-size:13px;font-weight:600;color:var(--text)">${esc(t('alarmsPanel'))}</span>
+              <span style="display:flex;gap:8px;align-items:center">
+                <button data-action="open-alhist" style="border:1px solid var(--border);background:var(--panel2);color:var(--dim);border-radius:6px;padding:3px 9px;font-size:11px;cursor:pointer">${esc(t('history'))}</button>
+                <span style="font-size:11px;font-family:var(--fontnum);font-weight:600;color:var(--danger);background:color-mix(in srgb,var(--danger) 15%,transparent);padding:2px 9px;border-radius:20px">${al.length}</span></span></div>
             <div style="display:flex;flex-direction:column;gap:9px">${alertRows}</div>
           </div>
           <div style="background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);padding:15px 17px">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:13px">
-              <span style="font-size:13px;font-weight:600;color:var(--text)">Nach Abteilung</span>
+              <span style="font-size:13px;font-weight:600;color:var(--text)">${esc(t('byDept'))}</span>
               <span style="font-size:11px;font-family:var(--fontnum);color:var(--mute)">${S.unit==='m3'?'m³':'€'} · ${esc(rangeLabel)}</span></div>
             <div style="display:flex;flex-direction:column;gap:11px">${deptRows}</div>
           </div>
@@ -323,9 +572,9 @@
 
       <div style="background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);padding:16px 18px">
         <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;margin-bottom:12px">
-          <div style="display:flex;align-items:center;gap:10px"><span style="font-size:13px;font-weight:600;color:var(--text)">Sensoren</span>
-            <span style="font-size:11px;font-family:var(--fontnum);color:var(--mute)">${flat.length} units</span></div>
-          <span style="font-size:11px;font-family:var(--fontnum);color:var(--mute)">Verbrauch &amp; Kosten · ${esc(rangeLabel)} · Zeile klicken fokussiert den Chart · ✎ öffnet die Konfiguration</span></div>
+          <div style="display:flex;align-items:center;gap:10px"><span style="font-size:13px;font-weight:600;color:var(--text)">${esc(t('btnSensors'))}</span>
+            <span style="font-size:11px;font-family:var(--fontnum);color:var(--mute)">${esc(t('sensorsUnits',flat.length))}</span></div>
+          <span style="font-size:11px;font-family:var(--fontnum);color:var(--mute)">${esc(admin?t('tableHintAdmin'):t('tableHint'))}</span></div>
         <div style="overflow-x:auto;margin:0 -4px">
           <table style="width:100%;border-collapse:collapse;min-width:800px">
             <thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table>
@@ -334,6 +583,7 @@
     </div>`;
 
     applyTheme();
+    document.documentElement.lang = S.lang;
     const host=document.getElementById('chart-host');
     if(host){
       host.addEventListener('mousemove',ev=>{ const i=chartIndexFromEvent(ev); if(i!==S.hover){S.hover=i; paintChart();} });
@@ -351,11 +601,14 @@
   const BTNACC='border:none;background:var(--accent);color:var(--onacc);border-radius:7px;padding:8px 16px;font-size:12.5px;font-weight:700;cursor:pointer';
   const BTNDGR='border:1px solid var(--danger);background:transparent;color:var(--danger);border-radius:7px;padding:7px 12px;font-size:12px;font-weight:600;cursor:pointer';
   const CHK='width:15px;height:15px;accent-color:var(--accent);cursor:pointer';
-  const DAY_LBL=['Mo','Di','Mi','Do','Fr','Sa','So'];   // Index = Python-weekday (Mo=0)
+  const DAY_LBL=()=> S.lang==='de'?['Mo','Di','Mi','Do','Fr','Sa','So']:['Mo','Tu','We','Th','Fr','Sa','Su'];   // Index = Python-weekday (Mo=0)
 
   async function api(path, opts){
-    const r=await fetch(path, Object.assign({headers:{'Content-Type':'application/json'}}, opts||{}));
+    const o=Object.assign({headers:{'Content-Type':'application/json'}}, opts||{});
+    if(TOKEN) o.headers['X-Auth']=TOKEN;
+    const r=await fetch(path, o);
     let body=null; try{ body=await r.json(); }catch(e){}
+    if(r.status===401){ AUTH.admin=false; throw new Error(t('loginRequired')); }
     if(!r.ok || (body && body.ok===false)) throw new Error((body&&body.error)||('HTTP '+r.status));
     return body;
   }
@@ -366,6 +619,7 @@
   }
 
   function closeModal(){ if(M&&M.type==='flasher') macConsoleStop(); M=null; renderModal(); poll(); }
+  function needLogin(){ if(isAdmin()) return false; openLogin(); return true; }
 
   // --- Downtime-Fenster-Editor (gemeinsam für Sensor-Override und Defaults) ----
   //   prefix 'f' -> M.edit.downtime (Sensor), 'c' -> M.edit.defaults.downtime (Settings)
@@ -373,27 +627,27 @@
   function dtEditorHTML(prefix, dt, disabled){
     const dis=disabled?'opacity:.45;pointer-events:none':'';
     const rows=dt.windows.map((w,i)=>{
-      const days=DAY_LBL.map((lb,d)=>`<button data-action="dt-day" data-tgt="${prefix}" data-w="${i}" data-d="${d}" style="border:1px solid var(--border);border-radius:5px;padding:3px 0;width:30px;font-size:11px;font-weight:600;cursor:pointer;font-family:var(--fontnum);background:${w.days.includes(d)?'var(--accent)':'var(--panel2)'};color:${w.days.includes(d)?'var(--onacc)':'var(--dim)'}">${lb}</button>`).join('');
+      const days=DAY_LBL().map((lb,d)=>`<button data-action="dt-day" data-tgt="${prefix}" data-w="${i}" data-d="${d}" style="border:1px solid var(--border);border-radius:5px;padding:3px 0;width:30px;font-size:11px;font-weight:600;cursor:pointer;font-family:var(--fontnum);background:${w.days.includes(d)?'var(--accent)':'var(--panel2)'};color:${w.days.includes(d)?'var(--onacc)':'var(--dim)'}">${lb}</button>`).join('');
       return `<div style="display:flex;flex-wrap:wrap;gap:7px;align-items:center;background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:8px 9px">
         <div style="display:flex;gap:3px">${days}</div>
         <input id="${prefix}-dt-start-${i}" value="${esc(w.start)}" placeholder="22:00" style="${INP};width:64px;text-align:center;font-family:var(--fontnum)">
         <span style="color:var(--mute);font-size:12px">–</span>
         <input id="${prefix}-dt-end-${i}" value="${esc(w.end)}" placeholder="06:00" style="${INP};width:64px;text-align:center;font-family:var(--fontnum)">
-        <button data-action="dt-del-window" data-tgt="${prefix}" data-w="${i}" title="Fenster entfernen" style="${BTN};padding:4px 9px;color:var(--danger);margin-left:auto">✕</button>
+        <button data-action="dt-del-window" data-tgt="${prefix}" data-w="${i}" title="${esc(t('dtDelWin'))}" style="${BTN};padding:4px 9px;color:var(--danger);margin-left:auto">✕</button>
       </div>`;
     }).join('');
     return `<div style="display:flex;flex-direction:column;gap:8px;${dis}">
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
         <label style="display:flex;gap:7px;align-items:center;font-size:12.5px;color:var(--text);cursor:pointer">
-          <input type="checkbox" id="${prefix}-dt-enabled" data-action="modal-redraw" ${dt.enabled?'checked':''} style="${CHK}"> Überwachung aktiv</label>
+          <input type="checkbox" id="${prefix}-dt-enabled" data-action="modal-redraw" ${dt.enabled?'checked':''} style="${CHK}"> ${esc(t('dtOn'))}</label>
         <div style="display:flex;gap:7px;align-items:center;margin-left:auto">
-          <span style="font-size:11.5px;color:var(--mute)">max. Verbrauch im Fenster</span>
+          <span style="font-size:11.5px;color:var(--mute)">${esc(t('dtMax'))}</span>
           <input id="${prefix}-dt-max" type="number" min="0" step="1" value="${esc(dt.max_nl)}" style="${INP};width:84px;text-align:right;font-family:var(--fontnum)">
           <span style="font-size:11.5px;color:var(--mute)">Nl</span></div>
       </div>
-      <div style="display:flex;flex-direction:column;gap:7px;${dt.enabled?'':'opacity:.45'}">${rows||'<span style="font-size:12px;color:var(--mute)">Keine Fenster definiert.</span>'}</div>
-      <button data-action="dt-add-window" data-tgt="${prefix}" style="${BTN};align-self:flex-start;${dt.enabled?'':'opacity:.45'}">＋ Fenster hinzufügen</button>
-      <span style="font-size:11px;color:var(--mute)">Alarm, wenn der Verbrauch innerhalb eines Fensters (z. B. Nacht/Wochenende) das Maximum überschreitet. Zeiten als HH:MM, Ende 24:00 = Mitternacht.</span>
+      <div style="display:flex;flex-direction:column;gap:7px;${dt.enabled?'':'opacity:.45'}">${rows||`<span style="font-size:12px;color:var(--mute)">${esc(t('dtNoWin'))}</span>`}</div>
+      <button data-action="dt-add-window" data-tgt="${prefix}" style="${BTN};align-self:flex-start;${dt.enabled?'':'opacity:.45'}">${esc(t('dtAddWin'))}</button>
+      <span style="font-size:11px;color:var(--mute)">${esc(t('dtHint'))}</span>
     </div>`;
   }
   function dtCollect(prefix){
@@ -408,17 +662,18 @@
 
   // --- Sensor-Manager -----------------------------------------------------
   async function openSensorManager(sel){
+    if(needLogin()) return;
     try{
       const reg=await api('api/sensors');
       M={type:'sensors', reg, sel:sel||null, edit:null, msg:'', msgErr:false, newDept:false};
       if(sel){ const s=reg.sensors.find(x=>x.id===sel); if(s) M.edit=makeEdit(s); else M.sel=null; }
       renderModal();
-    }catch(e){ alert('Sensor-Liste nicht ladbar: '+e.message); }
+    }catch(e){ if(M&&M.type==='login') return; alert(t('regLoadFail')+e.message); }
   }
   function makeEdit(s){
     const dfl=M.reg.defaults||{leak:{min:0.2,active:1.0},downtime:{enabled:false,max_nl:0,windows:[]}};
     return {
-      id:s.id, name:s.name||s.id, gas:s.gas||'', dept:s.dept||'',
+      id:s.id, name:s.name||s.id, gas:s.gas||'', dept:s.dept||'', note:s.note||'',
       leakOn:!!s.leak, leak:deepCopy(s.leak||dfl.leak),
       dtOn:!!s.downtime, downtime:deepCopy(s.downtime||dfl.downtime)
     };
@@ -431,6 +686,7 @@
     const e=M&&M.edit; if(!e) return;
     const g=id=>document.getElementById(id);
     if(g('f-name')) e.name=g('f-name').value;
+    if(g('f-note')) e.note=g('f-note').value;
     if(g('f-gas')) e.gas=g('f-gas').value;
     if(g('f-dept')) e.dept=g('f-dept').value;
     if(g('f-leak-on')) e.leakOn=g('f-leak-on').checked;
@@ -443,14 +699,15 @@
     collectSensorForm();
     const e=M.edit;
     const body={ name:(e.name||'').trim()||e.id, gas:e.gas||null, dept:e.dept||null,
+      note:(e.note||'').trim(),
       leak: e.leakOn?{min:e.leak.min,active:e.leak.active}:null,
       downtime: e.dtOn?e.downtime:null };
     try{
-      const res=await api('api/sensors/'+encodeURIComponent(e.id), {method:'POST', body:JSON.stringify(body)});
+      await api('api/sensors/'+encodeURIComponent(e.id), {method:'POST', body:JSON.stringify(body)});
       await refreshReg();
       const s=M.reg.sensors.find(x=>x.id===e.id); if(s) M.edit=makeEdit(s);
-      setMsg('Gespeichert ✓'); poll();
-    }catch(err){ setMsg('Fehler: '+err.message, true); }
+      setMsg(t('saved')); poll();
+    }catch(err){ setMsg(t('err')+err.message, true); }
   }
   function sensorListHTML(){
     const reg=M.reg;
@@ -462,206 +719,340 @@
     const items=list.map(s=>{
       const active=M.sel===s.id;
       const dot=s.online?'var(--good)':'var(--mute)';
-      const tag=s.gas?`${gasShort(s.gas)} · ${esc(dname(s.dept))}`:'<span style="color:var(--warn);font-weight:600">nicht zugeordnet</span>';
+      const tag=s.gas?`${gasShort(s.gas)} · ${esc(dname(s.dept))}`:`<span style="color:var(--warn);font-weight:600">${esc(t('notAssigned'))}</span>`;
       return `<button data-action="sel-sensor" data-id="${esc(s.id)}" style="display:block;width:100%;text-align:left;border:1px solid ${active?'var(--accent)':'var(--border)'};background:${active?'var(--panel2)':'transparent'};border-radius:8px;padding:9px 11px;cursor:pointer;color:inherit;font-family:inherit">
         <span style="display:flex;align-items:center;gap:8px">
           <span style="width:8px;height:8px;border-radius:50%;background:${dot};flex:none;${s.online?'animation:argpulse 2.2s ease-in-out infinite':''}"></span>
-          <span style="font-size:12.5px;font-weight:600;color:var(--text);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(s.name)}</span>
+          <span style="font-size:12.5px;font-weight:600;color:var(--text);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(s.name)}${s.note?' 📝':''}</span>
           <span style="font-size:10.5px;font-family:var(--fontnum);color:var(--mute);flex:none">${esc(s.id)}</span></span>
-        <span style="display:block;font-size:11px;color:var(--dim);margin-top:3px">${tag} · ${s.online?'online':'offline'} · ${esc(ago(s.lastSeen))}${s.meta&&s.meta.ip?` · <span style="font-family:var(--fontnum)">${esc(s.meta.ip)}</span>`:''}</span>
+        <span style="display:block;font-size:11px;color:var(--dim);margin-top:3px">${tag} · ${esc(s.online?t('online'):t('offline'))} · ${esc(ago(s.lastSeen))}${s.meta&&s.meta.ip?` · <span style="font-family:var(--fontnum)">${esc(s.meta.ip)}</span>`:''}</span>
       </button>`;
     }).join('');
     const deptChips=(reg.departments||[]).map(d=>`<span style="display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);background:var(--panel2);border-radius:20px;padding:4px 6px 4px 11px;font-size:11.5px;color:var(--text)">${esc(d.name)}
-      <button data-action="dept-del" data-id="${esc(d.id)}" title="Abteilung löschen" style="border:none;background:none;color:var(--mute);cursor:pointer;font-size:12px;padding:0 3px">✕</button></span>`).join(' ');
+      <button data-action="dept-del" data-id="${esc(d.id)}" title="${esc(t('deptDelTip'))}" style="border:none;background:none;color:var(--mute);cursor:pointer;font-size:12px;padding:0 3px">✕</button></span>`).join(' ');
     return `<div style="display:flex;flex-direction:column;gap:8px;height:100%;min-height:0">
-      <div style="flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:7px;padding-right:4px;min-height:120px">${items||'<span style="font-size:12px;color:var(--mute)">Noch keine Sensoren. Sobald ein Gerät publiziert, erscheint es hier automatisch.</span>'}</div>
+      <div style="flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:7px;padding-right:4px;min-height:120px">${items||`<span style="font-size:12px;color:var(--mute)">${esc(t('noSensorsYet'))}</span>`}</div>
       <div style="border-top:1px solid var(--border);padding-top:10px">
-        <span style="${LBL}">Abteilungen</span>
-        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">${deptChips||'<span style="font-size:11.5px;color:var(--mute)">Noch keine Abteilungen.</span>'}</div>
-        <div style="display:flex;gap:7px"><input id="dept-new-name" placeholder="Neue Abteilung …" style="${INP};flex:1">
+        <span style="${LBL}">${esc(t('depts'))}</span>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">${deptChips||`<span style="font-size:11.5px;color:var(--mute)">${esc(t('noDepts'))}</span>`}</div>
+        <div style="display:flex;gap:7px"><input id="dept-new-name" placeholder="${esc(t('newDept'))}" style="${INP};flex:1">
         <button data-action="dept-create" style="${BTN};flex:none">＋</button></div>
       </div>
     </div>`;
   }
   function sensorFormHTML(){
     const e=M.edit;
-    if(!e) return `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--mute);font-size:13px;text-align:center;padding:30px">Sensor links auswählen,<br>um ihn zu konfigurieren.</div>`;
+    if(!e) return `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--mute);font-size:13px;text-align:center;padding:30px">${t('pickSensor')}</div>`;
     const reg=M.reg;
     const dfl=reg.defaults||{leak:{min:0.2,active:1.0}};
-    const gasOpts=['<option value="">— kein Gas (nicht zugeordnet) —</option>']
+    const gasOpts=[`<option value="">${esc(t('noGas'))}</option>`]
       .concat(Object.entries(reg.gases||{}).map(([id,g])=>`<option value="${esc(id)}" ${e.gas===id?'selected':''}>${esc(g.name||id)}</option>`)).join('');
-    const deptOpts=['<option value="">— keine Abteilung —</option>']
+    const deptOpts=[`<option value="">${esc(t('noDept'))}</option>`]
       .concat((reg.departments||[]).map(d=>`<option value="${esc(d.id)}" ${e.dept===d.id?'selected':''}>${esc(d.name)}</option>`)).join('');
     const s=reg.sensors.find(x=>x.id===e.id)||{};
     const meta=s.meta||{};
     // Geräte-Infos aus dem meta-Topic der Einheits-Firmware (Bestands-Firmware: leer)
     const devBox=(meta.ip||meta.sp!=null||meta.hostname)?`
       <div style="border:1px solid var(--border);border-radius:9px;padding:10px 13px;display:flex;flex-wrap:wrap;gap:5px 16px;align-items:baseline;font-size:12px;color:var(--dim)">
-        <span style="font-size:12.5px;font-weight:700;color:var(--text)">Gerät</span>
-        ${meta.ip?`<a href="http://${esc(meta.ip)}/" target="_blank" rel="noopener" title="Geräte-Webinterface öffnen" style="color:var(--accent2);font-family:var(--fontnum);font-weight:600;text-decoration:none">${esc(meta.ip)} ↗</a>`:''}
-        ${meta.sp!=null?`<span>SP-Wert <b style="color:var(--text);font-family:var(--fontnum)">${esc(fmtNum(meta.sp,3))} Nl/Puls</b></span>`:''}
+        <span style="font-size:12.5px;font-weight:700;color:var(--text)">${esc(t('device'))}</span>
+        ${meta.ip?`<a href="http://${esc(meta.ip)}/" target="_blank" rel="noopener" title="${esc(t('deviceTip'))}" style="color:var(--accent2);font-family:var(--fontnum);font-weight:600;text-decoration:none">${esc(meta.ip)} ↗</a>`:''}
+        ${meta.sp!=null?`<span>${esc(t('spValue'))} <b style="color:var(--text);font-family:var(--fontnum)">${esc(fmtNum(meta.sp,3))} Nl/Puls</b></span>`:''}
         ${meta.hostname?`<span style="font-family:var(--fontnum)">${esc(meta.hostname)}</span>`:''}
         ${meta.mac?`<span style="font-family:var(--fontnum)">${esc(meta.mac)}</span>`:''}
         ${meta.fw?`<span>FW ${esc(meta.fw)}</span>`:''}
-        <span style="flex-basis:100%;font-size:11px;color:var(--mute)">SP-Wert (= Festo-SP, Nl/Puls) und Anlagen-ID stellst du im Geräte-Webinterface ein — Link oben, kein Neu-Flashen nötig.</span>
+        <span style="flex-basis:100%;font-size:11px;color:var(--mute)">${esc(t('devHint'))}</span>
         ${meta.ip?`<span style="flex-basis:100%;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-          <button data-action="ota-start" style="${BTN}">Firmware-Update (OTA)</button>
-          <span id="ota-status" style="font-size:11px;color:var(--mute)">spielt den zuletzt gebauten Stand auf („＋ Gerät“ → Firmware bauen) · Gerät startet neu, Zähler bleibt erhalten</span></span>`:''}
+          <button data-action="ota-start" style="${BTN}">${esc(t('otaBtn'))}</button>
+          <span id="ota-status" style="font-size:11px;color:var(--mute)">${esc(t('otaIdle'))}</span></span>`:''}
       </div>`:'';
     return `<div style="display:flex;flex-direction:column;gap:15px">
       <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
         <span style="font-size:14px;font-weight:700;color:var(--text)">${esc(e.id)}</span>
-        <span style="font-size:11.5px;color:${s.online?'var(--good)':'var(--mute)'};font-weight:600">${s.online?'● online':'○ offline'}</span>
-        <span style="font-size:11.5px;font-family:var(--fontnum);color:var(--dim)">Total ${esc(fmtNum(s.total,1))} Nl · Flow ${esc(fmtNum(s.flow,2))} Nl/min · ${esc(ago(s.lastSeen))}</span>
+        <span style="font-size:11.5px;color:${s.online?'var(--good)':'var(--mute)'};font-weight:600">${s.online?'● '+esc(t('online')):'○ '+esc(t('offline'))}</span>
+        <span style="font-size:11.5px;font-family:var(--fontnum);color:var(--dim)">${esc(t('total'))} ${esc(fmtNum(s.total,1))} Nl · Flow ${esc(fmtNum(s.flow,2))} Nl/min · ${esc(ago(s.lastSeen))}</span>
       </div>
       ${devBox}
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-        <div style="grid-column:1/-1"><span style="${LBL}">Anzeigename</span><input id="f-name" value="${esc(e.name)}" style="${INP}"></div>
-        <div><span style="${LBL}">Gas</span><select id="f-gas" style="${INP}">${gasOpts}</select></div>
-        <div><span style="${LBL}">Abteilung</span><select id="f-dept" style="${INP}">${deptOpts}</select></div>
+        <div style="grid-column:1/-1"><span style="${LBL}">${esc(t('name'))}</span><input id="f-name" value="${esc(e.name)}" style="${INP}"></div>
+        <div><span style="${LBL}">${esc(t('gasSel'))}</span><select id="f-gas" style="${INP}">${gasOpts}</select></div>
+        <div><span style="${LBL}">${esc(t('deptSel'))}</span><select id="f-dept" style="${INP}">${deptOpts}</select></div>
+        <div style="grid-column:1/-1"><span style="${LBL}">${esc(t('note'))}</span>
+          <textarea id="f-note" rows="2" placeholder="${esc(t('notePlaceholder'))}" style="${INP};resize:vertical;font-family:var(--fontsans)">${esc(e.note)}</textarea></div>
       </div>
 
       <div style="border:1px solid var(--border);border-radius:9px;padding:12px 13px">
         <label style="display:flex;gap:8px;align-items:center;font-size:12.5px;font-weight:600;color:var(--text);cursor:pointer;margin-bottom:9px">
           <input type="checkbox" id="f-leak-on" data-action="modal-redraw" ${e.leakOn?'checked':''} style="${CHK}">
-          Leck-Schwellen individuell (sonst Standard: ${esc(dfl.leak.min)}–${esc(dfl.leak.active)} Nl/min)</label>
+          ${esc(t('leakCustom',dfl.leak.min,dfl.leak.active))}</label>
         <div style="display:flex;gap:12px;align-items:center;${e.leakOn?'':'opacity:.45;pointer-events:none'}">
-          <span style="font-size:11.5px;color:var(--mute)">Leck ab</span>
+          <span style="font-size:11.5px;color:var(--mute)">${esc(t('leakFrom'))}</span>
           <input id="f-leak-min" type="number" step="0.1" min="0" value="${esc(e.leak.min)}" style="${INP};width:80px;text-align:right;font-family:var(--fontnum)">
-          <span style="font-size:11.5px;color:var(--mute)">bis</span>
+          <span style="font-size:11.5px;color:var(--mute)">${esc(t('leakTo'))}</span>
           <input id="f-leak-active" type="number" step="0.1" min="0" value="${esc(e.leak.active)}" style="${INP};width:80px;text-align:right;font-family:var(--fontnum)">
-          <span style="font-size:11.5px;color:var(--mute)">Nl/min (darüber gilt die Anlage als aktiv)</span></div>
+          <span style="font-size:11.5px;color:var(--mute)">${esc(t('leakUnit'))}</span></div>
       </div>
 
       <div style="border:1px solid var(--border);border-radius:9px;padding:12px 13px">
         <label style="display:flex;gap:8px;align-items:center;font-size:12.5px;font-weight:600;color:var(--text);cursor:pointer;margin-bottom:9px">
           <input type="checkbox" id="f-dt-on" data-action="modal-redraw" ${e.dtOn?'checked':''} style="${CHK}">
-          Downtime-Regel individuell (sonst Standard aus ⚙)</label>
+          ${esc(t('dtCustom'))}</label>
         ${dtEditorHTML('f', e.downtime, !e.dtOn)}
       </div>
 
       <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:center">
-        <button data-action="edit-save" style="${BTNACC}">Speichern</button>
-        <button data-action="edit-reset-counter" style="${BTN}" title="Kommando an das Gerät: Gesamtzähler nullen">Zähler nullen</button>
-        <button data-action="edit-delete" style="${BTNDGR};margin-left:auto">Sensor löschen</button>
+        <button data-action="edit-save" style="${BTNACC}">${esc(t('save'))}</button>
+        <button data-action="edit-reset-counter" style="${BTN}" title="${esc(t('resetTip'))}">${esc(t('resetCounter'))}</button>
+        <button data-action="edit-delete" style="${BTNDGR};margin-left:auto">${esc(t('delSensor'))}</button>
       </div>
-      <span style="font-size:11px;color:var(--mute)">„Zähler nullen“ sendet ein Reset-Kommando an das Gerät (MQTT). „Sensor löschen“ entfernt nur den Registry-Eintrag — ein Gerät, das weiter publiziert, erscheint erneut als „nicht zugeordnet“.</span>
     </div>`;
   }
 
   // --- Einstellungen (⚙) ----------------------------------------------------
   async function openSettings(){
+    if(needLogin()) return;
     try{
       const cfg=await api('api/config');
-      M={type:'settings', msg:'', msgErr:false, restartHint:false,
+      M={type:'settings', msg:'', msgErr:false, restartHint:false, restartWait:false, showPw:false,
          edit:{ stale_seconds:cfg.stale_seconds,
+                offline_alarm_minutes:cfg.offline_alarm_minutes,
+                backup:deepCopy(cfg.backup||{enabled:true,keep_days:30}),
                 gases:deepCopy(cfg.gases||{}),
                 defaults:deepCopy(cfg.defaults||{leak:{min:0.2,active:1.0},downtime:{enabled:false,max_nl:0,windows:[]}}),
-                mqtt:deepCopy(cfg.mqtt||{}) },
-         status:cfg.status||{}};
+                mqtt:deepCopy(cfg.mqtt||{}), adminpw:'' },
+         authRequired:!!(cfg.auth&&cfg.auth.required),
+         secrets:cfg.secrets||{}, status:cfg.status||{}};
       if(!M.edit.defaults.downtime) M.edit.defaults.downtime={enabled:false,max_nl:0,windows:[]};
       if(!M.edit.defaults.leak) M.edit.defaults.leak={min:0.2,active:1.0};
       renderModal();
-    }catch(e){ alert('Konfiguration nicht ladbar: '+e.message); }
+    }catch(e){ if(M&&M.type==='login') return; alert(t('cfgLoadFail')+e.message); }
   }
   function collectSettingsForm(){
     const e=M&&M.edit; if(!e) return;
     const g=id=>document.getElementById(id);
     if(g('c-stale')) e.stale_seconds=parseInt(g('c-stale').value,10)||120;
+    if(g('c-offmin')) e.offline_alarm_minutes=Math.max(0,parseInt(g('c-offmin').value,10)||0);
+    if(g('c-bak-on')) e.backup.enabled=g('c-bak-on').checked;
+    if(g('c-bak-days')) e.backup.keep_days=Math.max(1,parseInt(g('c-bak-days').value,10)||30);
     Object.keys(e.gases).forEach(gid=>{ const el=g('c-price-'+gid); if(el) e.gases[gid].price_per_m3=parseFloat(el.value)||0; });
     if(g('c-leak-min')) e.defaults.leak.min=parseFloat(g('c-leak-min').value);
     if(g('c-leak-active')) e.defaults.leak.active=parseFloat(g('c-leak-active').value);
     dtCollect('c');
     const m=e.mqtt;
     if(g('c-embedded')) m.embedded=g('c-embedded').checked;
-    if(g('c-anon')) m.allow_anonymous=g('c-anon').checked;
     if(g('c-bind')) m.bind=g('c-bind').value.trim();
     if(g('c-port')) m.port=parseInt(g('c-port').value,10)||1883;
     if(g('c-broker')) m.broker=g('c-broker').value.trim();
     if(g('c-user')) m.username=g('c-user').value.trim();
-    if(g('c-pass')) m._newpass=g('c-pass').value;
+    if(g('c-pass')) m.password=g('c-pass').value;
+    if(g('c-adminpw')) e.adminpw=g('c-adminpw').value;
   }
   async function saveSettings(){
     collectSettingsForm();
     const e=M.edit;
-    const body={ stale_seconds:e.stale_seconds, gases:e.gases,
+    const body={ stale_seconds:e.stale_seconds, offline_alarm_minutes:e.offline_alarm_minutes,
+      backup:e.backup, gases:e.gases,
       defaults:{leak:e.defaults.leak, downtime:e.defaults.downtime},
       mqtt:{ embedded:e.mqtt.embedded, bind:e.mqtt.bind, port:e.mqtt.port,
-             allow_anonymous:e.mqtt.allow_anonymous, broker:e.mqtt.broker,
-             username:e.mqtt.username } };
-    if(e.mqtt._newpass) body.mqtt.password=e.mqtt._newpass;
+             broker:e.mqtt.broker, username:e.mqtt.username, password:e.mqtt.password||'' } };
+    if(e.adminpw) body.admin_password=e.adminpw;
     try{
       const res=await api('api/config', {method:'POST', body:JSON.stringify(body)});
       M.restartHint=!!(res&&res.restart_required);
-      if(e.mqtt._newpass){ e.mqtt.has_password=true; e.mqtt._newpass=''; const p=document.getElementById('c-pass'); if(p) p.value=''; }
-      setMsg('Gespeichert ✓'); poll();
-    }catch(err){ setMsg('Fehler: '+err.message, true); }
+      if(res && typeof res.token==='string'){ setToken(res.token); AUTH.required=!!e.adminpw; AUTH.admin=true; }
+      e.adminpw='';
+      // Frischen Stand (Secrets-Abgleich, Auth) nachladen, Formularwerte behalten
+      try{ const cfg=await api('api/config'); M.secrets=cfg.secrets||{}; M.status=cfg.status||{}; M.authRequired=!!(cfg.auth&&cfg.auth.required); }catch(e2){}
+      setMsg(t('saved')); poll();
+    }catch(err){ setMsg(t('err')+err.message, true); }
   }
   function settingsHTML(){
-    const e=M.edit, m=e.mqtt, st=M.status||{};
-    const chip=(ok,txtOk,txtBad)=>`<span style="display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;font-family:var(--fontnum);padding:3px 10px;border-radius:20px;background:color-mix(in srgb,${ok?'var(--good)':'var(--danger)'} 14%,transparent);color:${ok?'var(--good)':'var(--danger)'}">● ${ok?txtOk:txtBad}</span>`;
+    const e=M.edit, m=e.mqtt, st=M.status||{}, sec=M.secrets||{};
+    const chip=(ok,txtOk,txtBad)=>`<span style="display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;font-family:var(--fontnum);padding:3px 10px;border-radius:20px;background:color-mix(in srgb,${ok?'var(--good)':'var(--danger)'} 14%,transparent);color:${ok?'var(--good)':'var(--danger)'}">● ${esc(ok?txtOk:txtBad)}</span>`;
     const priceRows=Object.entries(e.gases).map(([gid,g])=>`<div>
-      <span style="${LBL}">${esc(g.name||gid)} · €/m³</span>
+      <span style="${LBL}">${esc(t('priceOf',g.name||gid))}</span>
       <input id="c-price-${esc(gid)}" type="number" min="0" step="1" value="${esc(g.price_per_m3)}" style="${INP};text-align:right;font-family:var(--fontnum)"></div>`).join('');
+    const secretsLine = !sec.exists
+      ? `<span style="color:var(--warn)">${esc(t('secretsMissing'))}</span>`
+      : (sec.user_match&&sec.password_match)
+        ? `<span style="color:var(--good)">${esc(t('secretsOk'))}</span>`
+        : `<span style="color:var(--warn)">${esc(t('secretsDiff'))}</span>`;
+    const brokerLine = sec.exists&&sec.broker ? `<span>${esc(t('secretsBroker', sec.broker, sec.lan_ip||'?'))}</span>` : '';
+    const pwType=M.showPw?'text':'password';
     return `<div style="display:flex;flex-direction:column;gap:16px">
-      ${M.restartHint?`<div style="background:color-mix(in srgb,var(--warn) 14%,transparent);border:1px solid var(--warn);border-radius:8px;padding:9px 12px;font-size:12px;color:var(--warn);font-weight:600">Broker-Änderungen gespeichert — sie greifen erst nach einem Neustart des Backends (python app.py).</div>`:''}
+      ${M.restartHint?`<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;background:color-mix(in srgb,var(--warn) 14%,transparent);border:1px solid var(--warn);border-radius:8px;padding:9px 12px;font-size:12px;color:var(--warn);font-weight:600">${esc(t('restartNeeded'))}
+        <button data-action="cfg-restart" style="${BTN};color:var(--warn);border-color:var(--warn)">${esc(t('restartBtn'))}</button></div>`:''}
 
       <div style="border:1px solid var(--border);border-radius:9px;padding:13px 14px">
         <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:11px">
-          <span style="font-size:13px;font-weight:700;color:var(--text)">MQTT-Broker</span>
-          ${chip(st.embedded_running, 'Eingebetteter Broker läuft', m.embedded?'Eingebetteter Broker gestoppt':'Eingebetteter Broker aus')}
-          ${chip(st.ingest_connected, 'Ingest verbunden', 'Ingest getrennt')}
+          <span style="font-size:13px;font-weight:700;color:var(--text)">${esc(t('mqttBroker'))}</span>
+          ${chip(st.embedded_running, t('chBrokerRun'), m.embedded?t('chBrokerStop'):t('chBrokerOff'))}
+          ${chip(st.ingest_connected, t('chIngestOk'), t('chIngestNo'))}
+          ${chip(st.auth, t('chAuthOn'), t('chAuthOff'))}
         </div>
         <label style="display:flex;gap:8px;align-items:center;font-size:12.5px;color:var(--text);cursor:pointer;margin-bottom:11px">
           <input type="checkbox" id="c-embedded" data-action="modal-redraw" ${m.embedded?'checked':''} style="${CHK}">
-          Eingebetteten Broker verwenden (Geräte verbinden sich mit der LAN-IP dieses PCs)</label>
-        ${m.embedded?`
+          ${esc(t('embedded'))}</label>
         <div style="display:grid;grid-template-columns:1fr 110px;gap:12px">
-          <div><span style="${LBL}">Bind-Adresse</span><input id="c-bind" value="${esc(m.bind||'0.0.0.0')}" style="${INP};font-family:var(--fontnum)"></div>
-          <div><span style="${LBL}">Port</span><input id="c-port" type="number" value="${esc(m.port||1883)}" style="${INP};text-align:right;font-family:var(--fontnum)"></div>
-          <div><span style="${LBL}">Benutzer</span><input id="c-user" value="${esc(m.username||'')}" style="${INP}"></div>
-          <div><span style="${LBL}">Passwort</span><input id="c-pass" type="password" placeholder="${m.has_password?'••• (unverändert)':''}" style="${INP}"></div>
+          ${m.embedded
+            ?`<div><span style="${LBL}">${esc(t('bind'))}</span><input id="c-bind" value="${esc(m.bind||'0.0.0.0')}" style="${INP};font-family:var(--fontnum)"></div>`
+            :`<div><span style="${LBL}">${esc(t('extBroker'))}</span><input id="c-broker" value="${esc(m.broker||'')}" style="${INP};font-family:var(--fontnum)"></div>`}
+          <div><span style="${LBL}">${esc(t('port'))}</span><input id="c-port" type="number" value="${esc(m.port||1883)}" style="${INP};text-align:right;font-family:var(--fontnum)"></div>
+          <div><span style="${LBL}">${esc(t('user'))}</span><input id="c-user" value="${esc(m.username||'')}" style="${INP}"></div>
+          <div style="grid-column:2"><span style="${LBL}">${esc(t('password'))}</span>
+            <div style="display:flex;gap:6px;align-items:center">
+              <input id="c-pass" type="${pwType}" value="${esc(m.password||'')}" style="${INP};font-family:var(--fontnum)">
+              <button data-action="toggle-pw" title="${esc(M.showPw?t('hidePw'):t('showPw'))}" style="${BTN};padding:6px 9px;flex:none">${M.showPw?'🙈':'👁'}</button>
+            </div></div>
         </div>
-        <label style="display:flex;gap:8px;align-items:center;font-size:12.5px;color:var(--text);cursor:pointer;margin-top:11px">
-          <input type="checkbox" id="c-anon" ${m.allow_anonymous?'checked':''} style="${CHK}"> Anonyme Clients zulassen</label>
-        <span style="display:block;font-size:11px;color:var(--mute);margin-top:7px">
-          Haken raus + Benutzer/Passwort gesetzt = der Broker <b>prüft echte Logins</b> (Passwort-Hash-Datei, automatisch erzeugt).
-          Benutzer/Passwort müssen zu <span style="font-family:var(--fontnum)">firmware/secrets.yaml</span> (mqtt_user/mqtt_password) passen,
-          sonst werden die Geräte abgewiesen. Greift nach Backend-Neustart.</span>`
-        :`
-        <div style="display:grid;grid-template-columns:1fr 110px;gap:12px">
-          <div><span style="${LBL}">Externer Broker (Host/IP)</span><input id="c-broker" value="${esc(m.broker||'')}" style="${INP};font-family:var(--fontnum)"></div>
-          <div><span style="${LBL}">Port</span><input id="c-port" type="number" value="${esc(m.port||1883)}" style="${INP};text-align:right;font-family:var(--fontnum)"></div>
-          <div><span style="${LBL}">Benutzer</span><input id="c-user" value="${esc(m.username||'')}" style="${INP}"></div>
-          <div><span style="${LBL}">Passwort</span><input id="c-pass" type="password" placeholder="${m.has_password?'••• (unverändert)':''}" style="${INP}"></div>
-        </div>`}
+        <div style="display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--mute);margin-top:9px">
+          <span>${esc(t('authHint'))}</span>
+          ${secretsLine}
+          ${brokerLine}
+        </div>
       </div>
 
       <div style="border:1px solid var(--border);border-radius:9px;padding:13px 14px">
-        <span style="font-size:13px;font-weight:700;color:var(--text);display:block;margin-bottom:11px">Preise &amp; Allgemein</span>
+        <span style="font-size:13px;font-weight:700;color:var(--text);display:block;margin-bottom:11px">${esc(t('prices'))}</span>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px">
           ${priceRows}
-          <div><span style="${LBL}">Offline nach (s ohne Daten)</span>
+          <div><span style="${LBL}">${esc(t('staleAfter'))}</span>
           <input id="c-stale" type="number" min="10" step="10" value="${esc(e.stale_seconds)}" style="${INP};text-align:right;font-family:var(--fontnum)"></div>
+          <div><span style="${LBL}">${esc(t('offlineAlarm'))}</span>
+          <input id="c-offmin" type="number" min="0" step="5" value="${esc(e.offline_alarm_minutes)}" style="${INP};text-align:right;font-family:var(--fontnum)"></div>
+        </div>
+        <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:12px">
+          <label style="display:flex;gap:8px;align-items:center;font-size:12.5px;color:var(--text);cursor:pointer">
+            <input type="checkbox" id="c-bak-on" ${e.backup.enabled?'checked':''} style="${CHK}"> ${esc(t('backupOn'))}</label>
+          <span style="display:flex;gap:7px;align-items:center;font-size:11.5px;color:var(--mute)">${esc(t('backupKeep'))}
+            <input id="c-bak-days" type="number" min="1" step="1" value="${esc(e.backup.keep_days)}" style="${INP};width:70px;text-align:right;font-family:var(--fontnum)"></span>
         </div>
       </div>
 
       <div style="border:1px solid var(--border);border-radius:9px;padding:13px 14px">
-        <span style="font-size:13px;font-weight:700;color:var(--text);display:block;margin-bottom:11px">Standard-Schwellwerte (gelten, wenn ein Sensor keine eigenen hat)</span>
+        <span style="font-size:13px;font-weight:700;color:var(--text);display:block;margin-bottom:11px">${esc(t('defaults'))}</span>
         <div style="display:flex;gap:12px;align-items:center;margin-bottom:13px;flex-wrap:wrap">
-          <span style="font-size:11.5px;color:var(--mute)">Leck ab</span>
+          <span style="font-size:11.5px;color:var(--mute)">${esc(t('leakFrom'))}</span>
           <input id="c-leak-min" type="number" step="0.1" min="0" value="${esc(e.defaults.leak.min)}" style="${INP};width:80px;text-align:right;font-family:var(--fontnum)">
-          <span style="font-size:11.5px;color:var(--mute)">bis</span>
+          <span style="font-size:11.5px;color:var(--mute)">${esc(t('leakTo'))}</span>
           <input id="c-leak-active" type="number" step="0.1" min="0" value="${esc(e.defaults.leak.active)}" style="${INP};width:80px;text-align:right;font-family:var(--fontnum)">
           <span style="font-size:11.5px;color:var(--mute)">Nl/min</span></div>
-        <span style="${LBL}">Standard-Downtime</span>
+        <span style="${LBL}">${esc(t('defaultDt'))}</span>
         ${dtEditorHTML('c', e.defaults.downtime, false)}
       </div>
 
-      <div style="display:flex;gap:9px;align-items:center">
-        <button data-action="cfg-save" style="${BTNACC}">Speichern</button>
-        <span style="font-size:11.5px;color:var(--mute)">Preise/Schwellen greifen sofort · Broker-Änderungen nach Backend-Neustart</span>
+      <div style="border:1px solid var(--border);border-radius:9px;padding:13px 14px">
+        <span style="font-size:13px;font-weight:700;color:var(--text);display:block;margin-bottom:8px">${esc(t('loginBox'))}</span>
+        <span style="display:block;font-size:11.5px;color:${M.authRequired?'var(--mute)':'var(--warn)'};margin-bottom:10px">${esc(M.authRequired?t('loginOnHint'):t('loginOffHint'))}</span>
+        <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+          <div style="width:220px"><span style="${LBL}">${esc(t('loginPw'))}</span>
+            <input id="c-adminpw" type="password" placeholder="${esc(M.authRequired?t('loginPwPh'):'')}" style="${INP}"></div>
+          ${M.authRequired?`<button data-action="login-disable" style="${BTNDGR}">${esc(t('loginDisable'))}</button>`:''}
+        </div>
       </div>
+
+      <div style="border:1px solid var(--border);border-radius:9px;padding:13px 14px">
+        <span style="font-size:13px;font-weight:700;color:var(--text);display:block;margin-bottom:10px">${esc(t('backendBox'))}</span>
+        <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+          <button data-action="cfg-restart" style="${BTN}" ${M.restartWait?'disabled':''}>${esc(t('restartBtn'))}</button>
+          ${M.restartWait?`<span style="font-size:12px;color:var(--accent2);font-weight:600">⏳ ${esc(t('restarting'))}</span>`:''}
+        </div>
+      </div>
+
+      <div style="display:flex;gap:9px;align-items:center">
+        <button data-action="cfg-save" style="${BTNACC}">${esc(t('save'))}</button>
+        <span style="font-size:11.5px;color:var(--mute)">${esc(t('saveHint'))}</span>
+      </div>
+    </div>`;
+  }
+
+  // --- CSV-Export -----------------------------------------------------------
+  function isoDate(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+  function openExport(){
+    let scope='total';
+    if(S.scope.type==='dept') scope='dept:'+S.scope.id;
+    if(S.scope.type==='machine') scope='sensor:'+S.scope.id;
+    M={type:'export', scope, res:'day',
+       from:isoDate(new Date(Date.now()-29*86400e3)), to:isoDate(new Date())};
+    renderModal();
+  }
+  function collectExportForm(){
+    const g=id=>document.getElementById(id);
+    if(g('x-scope')) M.scope=g('x-scope').value;
+    if(g('x-res')) M.res=g('x-res').value;
+    if(g('x-from')) M.from=g('x-from').value;
+    if(g('x-to')) M.to=g('x-to').value;
+  }
+  function exportHTML(){
+    const opts=[`<option value="total" ${M.scope==='total'?'selected':''}>${esc(t('exTotal'))}</option>`]
+      .concat(depts().map(d=>`<option value="dept:${esc(d.id)}" ${M.scope==='dept:'+d.id?'selected':''}>${esc(t('exDept',d.name))}</option>`))
+      .concat(allSensors().map(s=>`<option value="sensor:${esc(s.id)}" ${M.scope==='sensor:'+s.id?'selected':''}>${esc(t('exSensor',s.name))}</option>`))
+      .join('');
+    return `<div style="display:flex;flex-direction:column;gap:14px">
+      <div><span style="${LBL}">${esc(t('exScope'))}</span><select id="x-scope" style="${INP}">${opts}</select></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+        <div><span style="${LBL}">${esc(t('exFrom'))}</span><input id="x-from" type="date" value="${esc(M.from)}" style="${INP};font-family:var(--fontnum)"></div>
+        <div><span style="${LBL}">${esc(t('exTo'))}</span><input id="x-to" type="date" value="${esc(M.to)}" style="${INP};font-family:var(--fontnum)"></div>
+        <div><span style="${LBL}">${esc(t('exRes'))}</span><select id="x-res" style="${INP}">
+          <option value="day" ${M.res==='day'?'selected':''}>${esc(t('exDay'))}</option>
+          <option value="hour" ${M.res==='hour'?'selected':''}>${esc(t('exHour'))}</option></select></div>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <button data-action="export-go" style="${BTNACC}">${esc(t('exGo'))}</button>
+        <span style="font-size:11px;color:var(--mute)">${esc(t('exHint'))}</span>
+      </div>
+    </div>`;
+  }
+
+  // --- Alarm-Historie -------------------------------------------------------
+  async function openAlarmHistory(){
+    try{
+      const res=await api('api/alarms/history?limit=200');
+      M={type:'alhist', rows:(res&&res.alarms)||[]};
+      renderModal();
+    }catch(e){ alert(t('histLoadFail')+e.message); }
+  }
+  function alhistHTML(){
+    const AM=ALERT_META();
+    if(!M.rows.length) return `<div style="font-size:12.5px;color:var(--mute);padding:10px 2px">${esc(t('histNone'))}</div>`;
+    const th=s=>`<th style="text-align:left;padding:7px 10px;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--mute);font-weight:600;border-bottom:1px solid var(--border);white-space:nowrap">${esc(s)}</th>`;
+    const rows=M.rows.map(a=>{
+      const meta=AM[a.type]||{title:a.type,val:v=>String(v)};
+      const state=!a.acknowledged?`<span style="color:var(--danger);font-weight:600">${esc(t('histActive'))}</span>`
+        : a.auto_cleared?esc(t('histAuto',fmtDT(a.ack_at))):esc(t('histAck',fmtDT(a.ack_at)));
+      return `<tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:8px 10px;font-family:var(--fontnum);font-size:12px;color:var(--dim);white-space:nowrap">${esc(fmtDT(a.raised_at))}</td>
+        <td style="padding:8px 10px;font-size:12.5px;color:var(--text);white-space:nowrap">${esc(a.sensorName)}<span style="color:var(--mute);font-size:11px"> · ${esc(a.deptName)}</span></td>
+        <td style="padding:8px 10px;font-size:12px;color:var(--dim);white-space:nowrap">${esc(meta.title)}</td>
+        <td style="padding:8px 10px;font-size:11px;font-weight:600;font-family:var(--fontnum);color:${levelColor(a.level)};white-space:nowrap">${esc(a.level==='critical'?t('lvCrit'):t('lvWarn'))}</td>
+        <td style="padding:8px 10px;font-family:var(--fontnum);font-size:12px;color:var(--text);white-space:nowrap">${esc(meta.val(a.value))}</td>
+        <td style="padding:8px 10px;font-size:11.5px;color:var(--dim);white-space:nowrap">${state}</td></tr>`;
+    }).join('');
+    return `<div style="overflow:auto;min-height:0;flex:1"><table style="width:100%;border-collapse:collapse;min-width:640px">
+      <thead><tr>${th(t('histRaised'))}${th(t('thSensor'))}${th(t('histType'))}${th(t('histLevel'))}${th(t('histValue'))}${th(t('histState'))}</tr></thead>
+      <tbody>${rows}</tbody></table></div>`;
+  }
+
+  // --- Login ----------------------------------------------------------------
+  function openLogin(){ M={type:'login', err:''}; renderModal();
+    setTimeout(()=>{ const el=document.getElementById('login-pw'); if(el) el.focus(); },50); }
+  async function doLogin(){
+    const el=document.getElementById('login-pw'); const pw=el?el.value:'';
+    try{
+      const res=await fetch('api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pw})});
+      const body=await res.json().catch(()=>null);
+      if(!res.ok||!body||body.ok===false){ M.err=t('loginWrong'); renderModal();
+        setTimeout(()=>{ const e2=document.getElementById('login-pw'); if(e2){e2.value='';e2.focus();} },30); return; }
+      if(body.token) setToken(body.token);
+      AUTH.admin=true; closeModal(); render();
+    }catch(e){ M.err=t('err')+e.message; renderModal(); }
+  }
+  function loginHTML(){
+    return `<div style="display:flex;flex-direction:column;gap:13px">
+      <span style="font-size:12.5px;color:var(--dim)">${esc(t('loginInfo'))}</span>
+      <div><span style="${LBL}">${esc(t('password'))}</span>
+        <input id="login-pw" type="password" style="${INP};font-family:var(--fontnum)"></div>
+      ${M.err?`<span style="font-size:12px;color:var(--danger);font-weight:600">${esc(M.err)}</span>`:''}
+      <button data-action="login-submit" style="${BTNACC};align-self:flex-start">${esc(t('loginBtn'))}</button>
     </div>`;
   }
 
@@ -681,7 +1072,8 @@
   }
 
   async function openFlasher(){
-    let fw=null; try{ fw=await api('api/firmware'); }catch(e){}
+    if(needLogin()) return;
+    let fw=null; try{ fw=await api('api/firmware'); }catch(e){ if(M&&M.type==='login') return; }
     M={type:'flasher', fw, macLog:[], mac:null, serialActive:false, msg:'', msgErr:false};
     renderModal();
     if(serialOk()) ensureEwt();
@@ -702,81 +1094,73 @@
       const log=document.getElementById('fw-log'); if(log) log.scrollTop=log.scrollHeight;
     }else if(M.type==='sensors'){
       const el=document.getElementById('ota-status');
-      if(fw.job.running){ if(el) el.textContent='läuft … '+(fw.job.log[fw.job.log.length-1]||''); }
+      if(fw.job.running){ if(el) el.textContent=t('otaRunning', fw.job.log[fw.job.log.length-1]||''); }
       else{ M.fwWatch=false; collectSensorForm(); await refreshReg();
-            const s=M.reg.sensors.find(x=>x.id===(M.edit&&M.edit.id));
-            setMsg(fw.job.ok?'OTA abgeschlossen ✓ — Gerät startet neu':'OTA fehlgeschlagen (Log unter „＋ Gerät“)', !fw.job.ok); }
+            setMsg(fw.job.ok?t('otaDone'):t('otaFail'), !fw.job.ok); }
     }
   }, 2500);
 
   function fwBoxHTML(){
     const fw=M.fw, job=fw&&fw.job;
-    if(!fw) return '<span style="font-size:12px;color:var(--danger)">Firmware-Status nicht ladbar — läuft das Backend auf dem Dashboard-PC?</span>';
-    const dt=ts=>new Date(ts*1000).toLocaleString('de-DE',{day:'2-digit',month:'2-digit',year:'2-digit',hour:'2-digit',minute:'2-digit'});
+    if(!fw) return `<span style="font-size:12px;color:var(--danger)">${esc(t('fwNoApi'))}</span>`;
+    const dt=ts=>new Date(ts*1000).toLocaleString(numLocale(),{day:'2-digit',month:'2-digit',year:'2-digit',hour:'2-digit',minute:'2-digit'});
     const build=fw.factory
-      ? `Build vom <b style="color:var(--text)">${esc(dt(fw.factory.mtime))}</b> · ${(fw.factory.size/1024).toFixed(0)} KB`
-      : '<b style="color:var(--warn)">noch kein Build vorhanden</b> — erst „Firmware bauen“ klicken';
+      ? t('fwFrom', esc(dt(fw.factory.mtime)), (fw.factory.size/1024).toFixed(0))
+      : t('fwNone');
+    const jobName=job.type==='build'?t('jobBuild'):t('jobOta',esc(job.target||''));
     const jstate=job.running
-      ? `<span style="color:var(--accent2)">⏳ ${job.type==='build'?'Build':'OTA → '+esc(job.target||'')} läuft …</span>`
-      : job.ok===true ? `<span style="color:var(--good)">✓ letzter Job (${esc(job.type||'')}) erfolgreich</span>`
-      : job.ok===false ? `<span style="color:var(--danger)">✗ letzter Job (${esc(job.type||'')}) fehlgeschlagen</span>` : '';
+      ? `<span style="color:var(--accent2)">${t('fwRunning',jobName)}</span>`
+      : job.ok===true ? `<span style="color:var(--good)">${esc(t('fwOkJob',job.type||''))}</span>`
+      : job.ok===false ? `<span style="color:var(--danger)">${esc(t('fwFailJob',job.type||''))}</span>` : '';
     const log=(job.log&&job.log.length)?`<pre id="fw-log" style="margin:8px 0 0;background:var(--bg2);border:1px solid var(--border);border-radius:7px;padding:8px 10px;font-size:10.5px;line-height:1.45;color:var(--dim);max-height:150px;overflow:auto;white-space:pre-wrap;font-family:var(--fontnum)">${job.log.map(esc).join('\n')}</pre>`:'';
     return `<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--dim)">
-        <button data-action="fw-build" style="${BTN}" ${job.running?'disabled':''}>Firmware bauen</button>
+        <button data-action="fw-build" style="${BTN}" ${job.running?'disabled':''}>${esc(t('fwBuild'))}</button>
         <span>${build}</span><span style="font-size:11.5px;font-family:var(--fontnum)">${jstate}</span>
       </div>${log}`;
   }
 
   function flasherHTML(){
-    const step=(n,t)=>`<div style="display:flex;gap:11px;align-items:flex-start">
+    const step=(n,txt)=>`<div style="display:flex;gap:11px;align-items:flex-start">
       <span style="flex:none;width:22px;height:22px;border-radius:50%;background:var(--accent);color:var(--onacc);display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;font-family:var(--fontnum)">${n}</span>
-      <span style="font-size:12.5px;color:var(--text);line-height:1.5">${t}</span></div>`;
+      <span style="font-size:12.5px;color:var(--text);line-height:1.5">${txt}</span></div>`;
     const box='border:1px solid var(--border);border-radius:9px;padding:13px 14px';
     const serialHint = serialOk() ? '' :
-      `<div style="background:color-mix(in srgb,var(--warn) 13%,transparent);border:1px solid var(--warn);border-radius:8px;padding:9px 12px;font-size:12px;color:var(--warn);font-weight:600;margin-bottom:10px">
-        USB-Flashen &amp; MAC-Auslesen gehen nur in <b>Chrome/Edge</b> direkt am Dashboard-PC über
-        <span style="font-family:var(--fontnum)">http://localhost:8000</span> (Web Serial braucht einen Secure Context).
-        Alternative per Kommandozeile: <span style="font-family:var(--fontnum)">esphome run gas-flowmeter.yaml</span> im firmware/-Ordner.</div>`;
+      `<div style="background:color-mix(in srgb,var(--warn) 13%,transparent);border:1px solid var(--warn);border-radius:8px;padding:9px 12px;font-size:12px;color:var(--warn);font-weight:600;margin-bottom:10px">${t('serialHint')}</div>`;
+    const manifest='api/firmware/manifest.json'+(TOKEN?('?auth='+encodeURIComponent(TOKEN)):'');
     const flashBtn = !serialOk() ? '' :
       EWT_STATE==='ready'
-        ? `<esp-web-install-button manifest="api/firmware/manifest.json"><button slot="activate" style="${BTNACC}">Firmware flashen (USB)</button></esp-web-install-button>`
+        ? `<esp-web-install-button manifest="${esc(manifest)}"><button slot="activate" style="${BTNACC}">${esc(t('flashBtn'))}</button></esp-web-install-button>`
         : EWT_STATE==='failed'
-          ? `<span style="font-size:12px;color:var(--danger)">Flash-Modul (vendor/esp-web-tools) nicht ladbar.</span>`
-          : `<span style="font-size:12px;color:var(--mute)">Flash-Modul lädt …</span>`;
+          ? `<span style="font-size:12px;color:var(--danger)">${esc(t('flashModFail'))}</span>`
+          : `<span style="font-size:12px;color:var(--mute)">${esc(t('flashModLoad'))}</span>`;
     const macBig = M.mac ? `<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:9px">
         <span style="font-family:var(--fontnum);font-size:21px;font-weight:700;letter-spacing:.04em;color:var(--accent)">${esc(M.mac)}</span>
-        <button data-action="mac-copy" style="${BTN}">kopieren</button>
-        <span style="font-size:11.5px;color:var(--dim)">→ diese Ethernet-MAC bei der IT zur Freischaltung einreichen</span></div>` : '';
-    const macLog = M.serialActive||M.macLog.length ? `<pre id="mac-log" style="margin:9px 0 0;background:var(--bg2);border:1px solid var(--border);border-radius:7px;padding:8px 10px;font-size:10.5px;line-height:1.45;color:var(--dim);max-height:130px;overflow:auto;white-space:pre-wrap;font-family:var(--fontnum)">${M.macLog.map(esc).join('\n')||'— warte auf Ausgabe (Board wird resettet) —'}</pre>` : '';
+        <button data-action="mac-copy" style="${BTN}">${esc(t('macCopy'))}</button>
+        <span style="font-size:11.5px;color:var(--dim)">${esc(t('macSubmit'))}</span></div>` : '';
+    const macLog = M.serialActive||M.macLog.length ? `<pre id="mac-log" style="margin:9px 0 0;background:var(--bg2);border:1px solid var(--border);border-radius:7px;padding:8px 10px;font-size:10.5px;line-height:1.45;color:var(--dim);max-height:130px;overflow:auto;white-space:pre-wrap;font-family:var(--fontnum)">${M.macLog.map(esc).join('\n')||esc(t('macWait'))}</pre>` : '';
     return `<div style="display:flex;flex-direction:column;gap:15px">
       ${serialHint}
       <div style="${box}">
-        <span style="font-size:13px;font-weight:700;color:var(--text);display:block;margin-bottom:11px">So kommt ein neues Gerät in die Messung</span>
+        <span style="font-size:13px;font-weight:700;color:var(--text);display:block;margin-bottom:11px">${esc(t('howto'))}</span>
         <div style="display:flex;flex-direction:column;gap:9px">
-          ${step(1,'Unten prüfen, ob ein aktueller <b>Firmware-Build</b> vorhanden ist — sonst „Firmware bauen“ (dauert einige Minuten, einmal pro Firmware-Stand).')}
-          ${step(2,'ESP32-POE2 per <b>USB-C an diesen PC</b> anschließen. <b style="color:var(--danger)">⚠ Niemals USB und PoE gleichzeitig</b> — das Board ist nicht galvanisch isoliert!')}
-          ${step(3,'„<b>Firmware flashen (USB)</b>“ klicken → seriellen Port wählen → Installation abwarten. Bei einem fabrikneuen Board „Erase device“ mitwählen.')}
-          ${step(4,'„<b>MAC-Adresse auslesen</b>“ klicken (gleiche USB-Verbindung): das Board wird neu gestartet und zeigt seine <b>Ethernet-MAC</b> — kopieren.')}
-          ${step(5,'MAC bei der <b>IT zur Netzwerk-Freischaltung</b> einreichen. <b>⏱ Dauert bis zu 2 Arbeitstage</b> — Board kann solange beiseitegelegt werden (die Firmware zeigt die MAC jederzeit wieder an).')}
-          ${step(6,'Nach der Freischaltung: USB trennen, Gerät per <b>PoE</b> anschließen → es erscheint hier unter „Sensoren“ automatisch als <b>„nicht zugeordnet“</b> (mit IP-Link). Dort Name/Gas/Abteilung zuweisen; im Geräte-Webinterface (IP-Link) den <b>SP-Wert</b> vom Festo-Sensor und optional eine Anlagen-ID setzen.')}
-          ${step(7,'Festo-Sensor gemäß Anleitung (§3 Verdrahtung, §4 Sensor-Parametrierung) anschließen — SP am Sensor und SP-Wert im Gerät müssen exakt übereinstimmen.')}
+          ${step(1,t('step1'))}${step(2,t('step2'))}${step(3,t('step3'))}${step(4,t('step4'))}${step(5,t('step5'))}${step(6,t('step6'))}${step(7,t('step7'))}
         </div>
       </div>
       <div style="${box}">
-        <span style="font-size:13px;font-weight:700;color:var(--text);display:block;margin-bottom:10px">Firmware-Build (gilt für alle Geräte)</span>
+        <span style="font-size:13px;font-weight:700;color:var(--text);display:block;margin-bottom:10px">${esc(t('fwBox'))}</span>
         <div id="fw-box">${fwBoxHTML()}</div>
       </div>
       <div style="${box}">
-        <span style="font-size:13px;font-weight:700;color:var(--text);display:block;margin-bottom:10px">Erstflash per USB</span>
+        <span style="font-size:13px;font-weight:700;color:var(--text);display:block;margin-bottom:10px">${esc(t('flashBox'))}</span>
         <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">${flashBtn}
-          <span style="font-size:11.5px;color:var(--mute)">Updates bereits verbundener Geräte laufen bequemer per OTA („Sensoren“ → Gerät → „Firmware-Update (OTA)“).</span></div>
+          <span style="font-size:11.5px;color:var(--mute)">${esc(t('flashOtaHint'))}</span></div>
       </div>
       <div style="${box}">
-        <span style="font-size:13px;font-weight:700;color:var(--text);display:block;margin-bottom:10px">MAC-Adresse auslesen (für die IT-Freischaltung)</span>
+        <span style="font-size:13px;font-weight:700;color:var(--text);display:block;margin-bottom:10px">${esc(t('macBox'))}</span>
         <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-          ${serialOk()?`<button data-action="mac-console" style="${BTN}" ${M.serialActive?'disabled':''}>${M.serialActive?'Konsole aktiv …':'MAC-Adresse auslesen (USB)'}</button>`:''}
-          ${M.serialActive?`<button data-action="mac-console-stop" style="${BTN}">Stopp</button>`:''}
-          <span style="font-size:11.5px;color:var(--mute)">Liest die USB-Konsole des geflashten Boards; die Ethernet-MAC steht auch später im Sensor-Manager (Geräte-Box), sobald das Gerät online ist.</span>
+          ${serialOk()?`<button data-action="mac-console" style="${BTN}" ${M.serialActive?'disabled':''}>${esc(M.serialActive?t('macActive'):t('macBtn'))}</button>`:''}
+          ${M.serialActive?`<button data-action="mac-console-stop" style="${BTN}">${esc(t('macStop'))}</button>`:''}
+          <span style="font-size:11.5px;color:var(--mute)">${esc(t('macHint'))}</span>
         </div>
         ${macBig}${macLog}
       </div>
@@ -799,7 +1183,7 @@
     if(!serialOk()||SERIAL.run) return;
     let port;
     try{ port=await navigator.serial.requestPort(); await port.open({baudRate:115200}); }
-    catch(e){ setMsg('Serielle Verbindung: '+e.message, true); return; }
+    catch(e){ setMsg(t('serialErr')+e.message, true); return; }
     SERIAL.port=port; SERIAL.run=true;
     M.macLog=[]; M.mac=null; M.serialActive=true; renderModal();
     // Board über RTS→EN resetten, damit das Boot-Log (mit MAC-Block) sofort kommt
@@ -823,7 +1207,7 @@
           }
         }finally{ try{SERIAL.reader.releaseLock();}catch(e){} }
       }
-    }catch(e){ if(SERIAL.run) macConsoleLine('[Verbindung getrennt: '+e.message+']'); }
+    }catch(e){ if(SERIAL.run) macConsoleLine(t('serialLost',e.message)); }
     macConsoleStop();
   }
 
@@ -835,21 +1219,47 @@
     if(M&&M.type==='flasher'&&M.serialActive){ M.serialActive=false; renderModal(); }
   }
 
+  // --- Backend-Neustart überwachen -----------------------------------------
+  let _restartIv=null;
+  function watchRestart(){
+    if(_restartIv) clearInterval(_restartIv);
+    const t0=Date.now();
+    _restartIv=setInterval(async ()=>{
+      let ok=false;
+      try{ const r=await fetch('api/health',{cache:'no-store'}); ok=r.ok; }catch(e){}
+      if(ok && Date.now()-t0>2500){
+        clearInterval(_restartIv); _restartIv=null;
+        if(M&&M.type==='settings'){ M.restartWait=false; M.restartHint=false;
+          try{ const cfg=await api('api/config'); M.status=cfg.status||{}; M.secrets=cfg.secrets||{}; }catch(e){}
+          setMsg(t('backOnline')); }
+        poll();
+      }else if(Date.now()-t0>90000){
+        clearInterval(_restartIv); _restartIv=null;
+        if(M&&M.type==='settings'){ M.restartWait=false; setMsg(t('restartTimeout'), true); }
+      }
+    }, 1500);
+  }
+
   // --- Modal-Rendering ------------------------------------------------------
   function renderModal(){
     if(!M){ modalEl.innerHTML=''; return; }
-    const title=M.type==='sensors'?'Sensoren verwalten':M.type==='flasher'?'Neues Gerät & Firmware':'Einstellungen';
+    const titles={sensors:t('titleSensors'), flasher:t('titleDevice'), settings:t('titleSettings'),
+                  export:t('titleExport'), alhist:t('titleHist'), login:t('titleLogin')};
+    const title=titles[M.type]||'';
+    const narrow=M.type==='login'||M.type==='export';
     const body=M.type==='sensors'
       ? `<div style="display:flex;gap:16px;min-height:0;flex:1">
            <div style="flex:0 0 285px;min-width:0;min-height:0">${sensorListHTML()}</div>
            <div style="flex:1;min-width:0;overflow-y:auto;padding-right:4px">${sensorFormHTML()}</div>
          </div>`
-      : M.type==='flasher'
-      ? `<div style="overflow-y:auto;min-height:0;flex:1;padding-right:4px">${flasherHTML()}</div>`
-      : `<div style="overflow-y:auto;min-height:0;flex:1;padding-right:4px">${settingsHTML()}</div>`;
+      : M.type==='flasher' ? `<div style="overflow-y:auto;min-height:0;flex:1;padding-right:4px">${flasherHTML()}</div>`
+      : M.type==='settings' ? `<div style="overflow-y:auto;min-height:0;flex:1;padding-right:4px">${settingsHTML()}</div>`
+      : M.type==='export' ? exportHTML()
+      : M.type==='alhist' ? alhistHTML()
+      : loginHTML();
     modalEl.innerHTML=`
     <div id="modal-backdrop" style="position:fixed;inset:0;background:rgba(4,7,12,.62);z-index:50;display:flex;align-items:center;justify-content:center;padding:20px;font-family:var(--fontsans)">
-      <div style="background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);box-shadow:0 18px 60px rgba(0,0,0,.45);width:min(920px,100%);max-height:92vh;display:flex;flex-direction:column;padding:17px 19px;color:var(--text)">
+      <div style="background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);box-shadow:0 18px 60px rgba(0,0,0,.45);width:min(${narrow?'440px':'920px'},100%);max-height:92vh;display:flex;flex-direction:column;padding:17px 19px;color:var(--text)">
         <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
           <span style="font-size:15px;font-weight:700">${esc(title)}</span>
           <span id="modal-msg" style="font-size:12px;font-weight:600;color:${M.msgErr?'var(--danger)':'var(--good)'}">${esc(M.msg||'')}</span>
@@ -866,61 +1276,75 @@
     const act=el.getAttribute('data-action');
 
     // ---- Dashboard-Aktionen
-    if(act==='range'){ S.range=el.getAttribute('data-val'); S.hover=-1; }
-    else if(act==='unit'){ S.unit=el.getAttribute('data-val'); }
-    else if(act==='theme'){ S.theme=el.getAttribute('data-val'); }
+    if(act==='range'){ S.range=el.getAttribute('data-val'); S.hover=-1; persistUI(); }
+    else if(act==='unit'){ S.unit=el.getAttribute('data-val'); persistUI(); }
+    else if(act==='theme'){ S.theme=el.getAttribute('data-val'); persistUI(); }
+    else if(act==='lang'){ S.lang=el.getAttribute('data-val'); persistUI(); if(M) renderModal(); }
     else if(act==='gas'){ S.gas=el.getAttribute('data-val'); S.scope={type:'total'}; }
     else if(act==='reset-scope'){ S.scope={type:'total'}; }
     else if(act==='sort'){ const k=el.getAttribute('data-key'); if(S.sortKey===k) S.sortDir=S.sortDir==='asc'?'desc':'asc'; else {S.sortKey=k;S.sortDir='desc';} }
     else if(act==='scope-dept'){ const id=el.getAttribute('data-id'); S.scope=(S.scope.type==='dept'&&S.scope.id===id)?{type:'total'}:{type:'dept',id}; }
     else if(act==='scope-machine'){ const id=el.getAttribute('data-id'); S.scope=(S.scope.type==='machine'&&S.scope.id===id)?{type:'total'}:{type:'machine',id}; }
-    else if(act==='ack'){ ev.stopPropagation(); const id=el.getAttribute('data-id'); try{ await fetch('api/alarms/'+id+'/ack',{method:'POST'}); await poll(); }catch(e){} return; }
+    else if(act==='ack'){ ev.stopPropagation(); const id=el.getAttribute('data-id'); try{ await api('api/alarms/'+id+'/ack',{method:'POST'}); await poll(); }catch(e){} return; }
+
+    // ---- Login/Logout
+    else if(act==='open-login'){ openLogin(); return; }
+    else if(act==='login-submit'){ await doLogin(); return; }
+    else if(act==='logout'){ setToken(''); AUTH.admin=!AUTH.required; if(M) closeModal(); render(); return; }
 
     // ---- Modals öffnen/schließen
     else if(act==='open-sensors'){ ev.stopPropagation(); openSensorManager(el.getAttribute('data-id')||null); return; }
     else if(act==='open-settings'){ openSettings(); return; }
     else if(act==='open-flasher'){ openFlasher(); return; }
+    else if(act==='open-export'){ openExport(); return; }
+    else if(act==='open-alhist'){ openAlarmHistory(); return; }
     else if(act==='modal-close'){ closeModal(); return; }
+
+    // ---- Export
+    else if(act==='export-go'){ collectExportForm();
+      const url='api/export.csv?scope='+encodeURIComponent(M.scope)+'&res='+encodeURIComponent(M.res)
+        +'&start='+encodeURIComponent(M.from)+'&end='+encodeURIComponent(M.to);
+      const a=document.createElement('a'); a.href=url; a.download=''; document.body.appendChild(a); a.click(); a.remove(); return; }
 
     // ---- „＋ Gerät“ / Firmware
     else if(act==='fw-build'){
       try{ await api('api/firmware/build',{method:'POST'}); M.fw=await api('api/firmware'); renderModal(); }
-      catch(err){ setMsg('Fehler: '+err.message,true); } return; }
+      catch(err){ setMsg(t('err')+err.message,true); } return; }
     else if(act==='mac-console'){ macConsoleStart(); return; }
     else if(act==='mac-console-stop'){ macConsoleStop(); return; }
     else if(act==='mac-copy'){
-      try{ await navigator.clipboard.writeText(M.mac||''); setMsg('MAC kopiert ✓'); }
-      catch(err){ setMsg('Kopieren fehlgeschlagen: '+err.message,true); } return; }
+      try{ await navigator.clipboard.writeText(M.mac||''); setMsg(t('macCopied')); }
+      catch(err){ setMsg(t('macCopyFail')+err.message,true); } return; }
     else if(act==='ota-start'){ collectSensorForm();
       const sMeta=((M.reg.sensors.find(x=>x.id===M.edit.id)||{}).meta)||{};
-      if(!confirm(`Firmware-Update (OTA) auf „${M.edit.name}“ (${sMeta.ip||'?'}) starten?\nDas Gerät startet danach neu; Zähler und Einstellungen bleiben erhalten.`)) return;
+      if(!confirm(t('otaConfirm', M.edit.name, sMeta.ip||'?'))) return;
       try{ await api('api/sensors/'+encodeURIComponent(M.edit.id)+'/ota',{method:'POST'});
-        M.fwWatch=true; const el=document.getElementById('ota-status'); if(el) el.textContent='OTA gestartet …'; }
-      catch(err){ setMsg('Fehler: '+err.message,true); } return; }
+        M.fwWatch=true; const st=document.getElementById('ota-status'); if(st) st.textContent=t('otaStarted'); }
+      catch(err){ setMsg(t('err')+err.message,true); } return; }
 
     // ---- Sensor-Manager
     else if(act==='sel-sensor'){ const id=el.getAttribute('data-id'); const s=M.reg.sensors.find(x=>x.id===id);
       M.sel=id; M.edit=s?makeEdit(s):null; M.msg=''; renderModal(); return; }
     else if(act==='edit-save'){ await saveSensor(); return; }
     else if(act==='edit-reset-counter'){ collectSensorForm();
-      if(!confirm(`Gesamtzähler von „${M.edit.name}“ (${M.edit.id}) wirklich auf 0 setzen?\nDas Kommando wird an das Gerät gesendet.`)) return;
-      try{ await api('api/sensors/'+encodeURIComponent(M.edit.id)+'/reset',{method:'POST'}); setMsg('Reset-Kommando gesendet ✓'); }
-      catch(err){ setMsg('Fehler: '+err.message,true); } return; }
+      if(!confirm(t('resetConfirm', M.edit.name, M.edit.id))) return;
+      try{ await api('api/sensors/'+encodeURIComponent(M.edit.id)+'/reset',{method:'POST'}); setMsg(t('resetSent')); }
+      catch(err){ setMsg(t('err')+err.message,true); } return; }
     else if(act==='edit-delete'){
-      if(!confirm(`Sensor „${M.edit.name}“ (${M.edit.id}) aus der Registry löschen?\nHistorische Daten bleiben in der DB; ein aktives Gerät registriert sich neu.`)) return;
-      try{ await api('api/sensors/'+encodeURIComponent(M.edit.id),{method:'DELETE'}); await refreshReg(); M.sel=null; M.edit=null; setMsg('Gelöscht ✓'); poll(); }
-      catch(err){ setMsg('Fehler: '+err.message,true); } return; }
+      if(!confirm(t('delConfirm', M.edit.name, M.edit.id))) return;
+      try{ await api('api/sensors/'+encodeURIComponent(M.edit.id),{method:'DELETE'}); await refreshReg(); M.sel=null; M.edit=null; setMsg(t('deleted')); poll(); }
+      catch(err){ setMsg(t('err')+err.message,true); } return; }
     else if(act==='dept-create'){ collectSensorForm();
       const inp=document.getElementById('dept-new-name'); const name=(inp&&inp.value.trim())||'';
-      if(!name){ setMsg('Name der Abteilung fehlt',true); return; }
+      if(!name){ setMsg(t('deptMissing'),true); return; }
       try{ const res=await api('api/departments',{method:'POST',body:JSON.stringify({name})});
-        await refreshReg(); if(M.edit&&!M.edit.dept) M.edit.dept=res.id; setMsg('Abteilung angelegt ✓'); }
-      catch(err){ setMsg('Fehler: '+err.message,true); } return; }
+        await refreshReg(); if(M.edit&&!M.edit.dept) M.edit.dept=res.id; setMsg(t('deptCreated')); }
+      catch(err){ setMsg(t('err')+err.message,true); } return; }
     else if(act==='dept-del'){ collectSensorForm(); const id=el.getAttribute('data-id');
-      if(!confirm('Abteilung löschen? Zugeordnete Sensoren verlieren nur die Zuordnung.')) return;
+      if(!confirm(t('deptDelConfirm'))) return;
       try{ await api('api/departments/'+encodeURIComponent(id),{method:'DELETE'});
-        await refreshReg(); if(M.edit&&M.edit.dept===id) M.edit.dept=''; setMsg('Abteilung gelöscht ✓'); poll(); }
-      catch(err){ setMsg('Fehler: '+err.message,true); } return; }
+        await refreshReg(); if(M.edit&&M.edit.dept===id) M.edit.dept=''; setMsg(t('deptDeleted')); poll(); }
+      catch(err){ setMsg(t('err')+err.message,true); } return; }
 
     // ---- gemeinsame Formular-Interaktionen (Sensor + Settings)
     else if(act==='modal-redraw'){ if(M.type==='sensors') collectSensorForm(); else collectSettingsForm(); renderModal(); return; }
@@ -938,23 +1362,42 @@
 
     // ---- Einstellungen
     else if(act==='cfg-save'){ await saveSettings(); return; }
+    else if(act==='toggle-pw'){ collectSettingsForm(); M.showPw=!M.showPw; renderModal(); return; }
+    else if(act==='login-disable'){ collectSettingsForm();
+      if(!confirm(t('loginDisableConfirm'))) return;
+      try{ await api('api/config',{method:'POST',body:JSON.stringify({admin_password:''})});
+        setToken(''); AUTH.required=false; AUTH.admin=true; M.authRequired=false; setMsg(t('saved')); render(); renderModal(); }
+      catch(err){ setMsg(t('err')+err.message,true); } return; }
+    else if(act==='cfg-restart'){ collectSettingsForm();
+      if(!confirm(t('restartConfirm'))) return;
+      try{ await api('api/restart',{method:'POST'}); M.restartWait=true; renderModal(); watchRestart(); }
+      catch(err){ setMsg(t('err')+err.message,true); } return; }
     else return;
     render();
   });
   // Backdrop-Klick schließt (nur wenn direkt auf den Backdrop geklickt wurde)
   modalEl.addEventListener('mousedown', ev=>{ if(ev.target && ev.target.id==='modal-backdrop') closeModal(); });
-  document.addEventListener('keydown', ev=>{ if(ev.key==='Escape' && M) closeModal(); });
+  document.addEventListener('keydown', ev=>{
+    if(ev.key==='Escape' && M) closeModal();
+    else if((ev.key==='Enter'||ev.key==='Return') && M && M.type==='login'){ ev.preventDefault(); doLogin(); }
+  });
 
   // ------------------------------------------------------------------ data
   async function poll(){
     try{
       const r=await fetch('api/data',{cache:'no-store'});
-      if(r.ok){ DATA=await r.json(); S.pollError=false; S.lastOk=Date.now(); render(); }
+      if(r.ok){
+        DATA=await r.json(); S.pollError=false; S.lastOk=Date.now();
+        // Login-Pflicht kann sich serverseitig ändern -> Auth-Status nachziehen
+        if(AUTH.known && !!DATA.authRequired!==AUTH.required){ await refreshAuth(); }
+        render();
+      }
       else if(!S.pollError){ S.pollError=true; render(); }
     }catch(e){ if(!S.pollError){ S.pollError=true; render(); } }
   }
   setInterval(poll, 5000);
-  setInterval(()=>{ S.now=Date.now(); const c=document.getElementById('clock'); if(c){ const d=new Date(S.now); c.textContent=d.toLocaleTimeString('en-GB')+' · '+d.toLocaleDateString('en-GB',{day:'2-digit',month:'short'}); } }, 1000);
+  setInterval(()=>{ S.now=Date.now(); const c=document.getElementById('clock'); if(c){ const d=new Date(S.now); c.textContent=d.toLocaleTimeString(numLocale())+' · '+d.toLocaleDateString(numLocale(),{day:'2-digit',month:'short'}); } }, 1000);
   applyTheme();
+  refreshAuth().then(()=>{ if(DATA) render(); });
   poll();
 })();
