@@ -1,6 +1,6 @@
-# Projekt-Übergabe an Jorge — Gas-Durchflussmessung (iwb / TUM)
+# Projekt-Übergabe
 
-**Übergabe von:** Lovis Wach · **Stand:** 27.08.2026 · **Bei Fragen jederzeit bei Lovis melden.**
+**Stand:** 27.08.2026 · **Bei Fragen jederzeit bei Lovis melden.**
 
 ## Worum es geht (2 Minuten)
 
