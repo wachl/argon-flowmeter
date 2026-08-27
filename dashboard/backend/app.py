@@ -264,6 +264,12 @@ def init_db() -> None:
         acols = [r[1] for r in c.execute("PRAGMA table_info(alarms)")]
         if "auto_cleared" not in acols:
             c.execute("ALTER TABLE alarms ADD COLUMN auto_cleared INTEGER DEFAULT 0")
+        # Migration: Alarm-Lebenszyklus ACTIVE -> ACK -> RESOLVED. "acknowledged"
+        # hiess bisher "erledigt"; Bestandsdaten werden als RESOLVED uebernommen.
+        if "resolved" not in acols:
+            c.execute("ALTER TABLE alarms ADD COLUMN resolved INTEGER DEFAULT 0")
+            c.execute("ALTER TABLE alarms ADD COLUMN resolved_at INTEGER")
+            c.execute("UPDATE alarms SET resolved=1, resolved_at=ack_at WHERE acknowledged=1")
     with db() as c:
         for sid, total in c.execute("SELECT machine, total FROM live WHERE total IS NOT NULL"):
             if total is not None:
@@ -299,22 +305,25 @@ def update_live(sensor: str, **fields) -> None:
 
 
 # ------------------------------------------------------------------------ Alarms
+# Lebenszyklus: ACTIVE (offen) -> ACK (quittiert, Ursache besteht weiter, bleibt
+# sichtbar) -> RESOLVED (erledigt, nur noch Historie). Re-Arm-Regeln greifen erst
+# nach RESOLVED.
 def raise_alarm(sensor: str, gas: str, atype: str, level: str, value: float, now_ts: int,
                 *, max_nl: float | None = None, last_seen: int | None = None) -> None:
-    """Alarm anlegen – mit Dedup und Re-Arm nach Quittierung.
+    """Alarm anlegen – mit Dedup und Re-Arm nach Aufloesung.
 
-    Aktiver (unquittierter) Alarm gleichen Typs -> nur aktualisieren. Nach Quittierung:
-    Leck/Mehrverbrauch erst nach 6 h Ruhe erneut; Downtime erst, wenn seit Quittierung
-    erneut max_nl zusätzlich verbraucht wurde; Offline erst, wenn das Gerät seit der
-    Quittierung wieder online war (last_seen > ack_at).
+    Offener Alarm gleichen Typs (ACTIVE oder ACK) -> nur aktualisieren. Nach RESOLVED:
+    Leck/Mehrverbrauch erst nach 6 h Ruhe erneut; Downtime erst, wenn seither erneut
+    max_nl zusätzlich verbraucht wurde; Offline erst, wenn das Gerät seit der
+    Aufloesung wieder online war (last_seen > resolved_at).
     """
     with _lock, db() as c:
         row = c.execute(
-            "SELECT id, acknowledged, ack_at, ack_value FROM alarms "
+            "SELECT id, resolved, resolved_at, ack_value FROM alarms "
             "WHERE sensor=? AND type=? ORDER BY id DESC LIMIT 1", (sensor, atype)).fetchone()
         if row:
-            aid, ack, ack_at, ack_value = row
-            if not ack:
+            aid, resolved, resolved_at, ack_value = row
+            if not resolved:
                 c.execute("UPDATE alarms SET level=?, value=?, gas=? WHERE id=?",
                           (level, value, gas, aid))
                 return
@@ -322,9 +331,9 @@ def raise_alarm(sensor: str, gas: str, atype: str, level: str, value: float, now
                 if ack_value is not None and value <= ack_value + (max_nl or 0):
                     return
             elif atype == "offline":
-                if ack_at and last_seen is not None and ack_at >= last_seen:
-                    return                 # gleiche Offline-Phase, bereits quittiert
-            elif ack_at and (now_ts - ack_at) < 6 * 3600:
+                if resolved_at and last_seen is not None and resolved_at >= last_seen:
+                    return                 # gleiche Offline-Phase, bereits erledigt
+            elif resolved_at and (now_ts - resolved_at) < 6 * 3600:
                 return
         c.execute(
             "INSERT INTO alarms(sensor,gas,type,level,value,raised_at) VALUES(?,?,?,?,?,?)",
@@ -333,33 +342,49 @@ def raise_alarm(sensor: str, gas: str, atype: str, level: str, value: float, now
 
 def clear_offline_alarm(sensor: str) -> None:
     """Offline-Alarm automatisch aufloesen, sobald das Geraet wieder online ist."""
+    now = int(time.time())
     with _lock, db() as c:
         c.execute(
-            "UPDATE alarms SET acknowledged=1, ack_at=?, ack_value=value, auto_cleared=1 "
-            "WHERE sensor=? AND type='offline' AND acknowledged=0",
-            (int(time.time()), sensor))
+            "UPDATE alarms SET acknowledged=1, ack_at=COALESCE(ack_at,?), resolved=1,"
+            " resolved_at=?, ack_value=value, auto_cleared=1 "
+            "WHERE sensor=? AND type='offline' AND resolved=0",
+            (now, now, sensor))
 
 
 def ack_alarm(aid: int) -> bool:
+    """Quittieren: gesehen, Ursache besteht weiter — Alarm bleibt gelistet (ACK)."""
     now = int(time.time())
     with _lock, db() as c:
         cur = c.execute(
-            "UPDATE alarms SET acknowledged=1, ack_at=?, ack_value=value "
-            "WHERE id=? AND acknowledged=0", (now, aid))
+            "UPDATE alarms SET acknowledged=1, ack_at=? "
+            "WHERE id=? AND acknowledged=0 AND resolved=0", (now, aid))
+        return cur.rowcount > 0
+
+
+def resolve_alarm(aid: int) -> bool:
+    """Aufloesen: erledigt — wandert in die Historie, Re-Arm-Regeln starten."""
+    now = int(time.time())
+    with _lock, db() as c:
+        cur = c.execute(
+            "UPDATE alarms SET acknowledged=1, ack_at=COALESCE(ack_at,?),"
+            " resolved=1, resolved_at=?, ack_value=value "
+            "WHERE id=? AND resolved=0", (now, now, aid))
         return cur.rowcount > 0
 
 
 def active_alarms() -> list[dict]:
+    """Alle offenen Alarme (ACTIVE + ACK), neueste zuerst."""
     with db() as c:
         rows = c.execute(
-            "SELECT id, sensor, gas, type, level, value, raised_at FROM alarms "
-            "WHERE acknowledged=0 ORDER BY raised_at DESC").fetchall()
+            "SELECT id, sensor, gas, type, level, value, raised_at, acknowledged, ack_at "
+            "FROM alarms WHERE resolved=0 ORDER BY raised_at DESC").fetchall()
     out = []
-    for aid, sensor, gas, atype, level, value, raised_at in rows:
+    for aid, sensor, gas, atype, level, value, raised_at, ack, ack_at in rows:
         s = SENSORS.get(sensor, {})
         out.append({"id": aid, "sensor": sensor, "sensorName": s.get("name", sensor),
                     "gas": gas, "deptName": dept_name(s.get("dept")),
-                    "type": atype, "level": level, "value": value, "raised_at": raised_at})
+                    "type": atype, "level": level, "value": value, "raised_at": raised_at,
+                    "state": "ack" if ack else "active", "ack_at": ack_at})
     return out
 
 
@@ -832,7 +857,10 @@ def build_payload() -> dict:
     today0 = now.replace(hour=0, minute=0, second=0, microsecond=0)
     day_starts = [today0 - timedelta(days=29 - i) for i in range(30)]
     hour_starts = [today0 + timedelta(hours=h) for h in range(24)]
-    earliest = int(day_starts[0].timestamp())
+    # Rollierendes 24-h-Fenster (endet mit der laufenden Stunde) fuer die 24-H-Ansicht
+    cur_hour = now.replace(minute=0, second=0, microsecond=0)
+    hour_starts24 = [cur_hour - timedelta(hours=23 - i) for i in range(24)]
+    earliest = int(min(day_starts[0], hour_starts24[0]).timestamp())
 
     live = read_live()
     stale = CONFIG.get("stale_seconds", 120)
@@ -847,6 +875,7 @@ def build_payload() -> dict:
             for d in day_starts
         ]
         hourly = [round(buckets.get(int(h.timestamp()), 0.0), 2) for h in hour_starts]
+        hourly24 = [round(buckets.get(int(h.timestamp()), 0.0), 2) for h in hour_starts24]
 
         lv = live.get(sid, {})
         fresh = lv.get("updated") and (now_ts - lv["updated"] <= stale)
@@ -863,12 +892,22 @@ def build_payload() -> dict:
             continue
 
         evaluate_sensor_alarms(s, daily, flow, status, lv.get("updated"), now, now_ts)
+        leak = sensor_leak(s)
+        dt_rule = sensor_downtime(s)
         sensors_out.append({
             "id": sid, "name": s.get("name", sid), "gas": s["gas"],
             "deptId": s.get("dept"), "deptName": dept_name(s.get("dept")),
-            "daily": daily, "hourly": hourly,
+            "daily": daily, "hourly": hourly, "hourly24": hourly24,
             "flow": round(flow, 2), "status": status, "total": total,
             "lastSeen": lv.get("updated"), "note": s.get("note") or "",
+            # Geraete-Metadaten (Einheits-Firmware) fuer die Anlagen-Info-Karte
+            "meta": parse_meta(lv.get("meta")),
+            # Effektive Regeln (Override oder Standard) fuer die Schwellen-Karte
+            "rules": {"leak": leak,
+                      "leakCustom": bool(s.get("leak")),
+                      "downtime": {"enabled": bool(dt_rule.get("enabled")),
+                                   "max_nl": dt_rule.get("max_nl", 0)},
+                      "downtimeCustom": bool(s.get("downtime"))},
         })
 
     alarms = active_alarms()
@@ -890,12 +929,15 @@ def build_payload() -> dict:
     return {
         "now": int(now.timestamp() * 1000),
         "refDates": [int(d.timestamp() * 1000) for d in day_starts],
+        "refHours24": [int(h.timestamp() * 1000) for h in hour_starts24],
         "gases": gases_out,
         "departments": DEPARTMENTS,
         "sensors": sensors_out,
         "unassigned": unassigned,
         "alarms": alarms,
         "authRequired": auth_required(),
+        "staleSeconds": stale,
+        "offlineAlarmMinutes": int(CONFIG.get("offline_alarm_minutes", 15) or 0),
         "broker": {
             "embedded": _broker_state.get("embedded", False),
             "embedded_running": _broker_state.get("running", False),
@@ -1139,25 +1181,63 @@ def api_ack_alarm(aid: int, req: Request):
     return {"ok": ack_alarm(aid)}
 
 
+@app.post("/api/alarms/{aid}/resolve")
+def api_resolve_alarm(aid: int, req: Request):
+    if not is_admin(req):
+        return deny()
+    return {"ok": resolve_alarm(aid)}
+
+
 @app.get("/api/alarms/history")
 def api_alarm_history(limit: int = 200):
-    """Alarm-Historie: aktive und quittierte Alarme, neueste zuerst (read-only)."""
+    """Alarm-Historie: offene und aufgeloeste Alarme, neueste zuerst (read-only)."""
     limit = max(1, min(int(limit), 1000))
     with db() as c:
         rows = c.execute(
             "SELECT id, sensor, gas, type, level, value, raised_at,"
-            " acknowledged, ack_at, auto_cleared FROM alarms"
+            " acknowledged, ack_at, auto_cleared, resolved, resolved_at FROM alarms"
             " ORDER BY raised_at DESC, id DESC LIMIT ?", (limit,)).fetchall()
     out = []
     for (aid, sensor, gas, atype, level, value, raised_at,
-         ack, ack_at, auto_cleared) in rows:
+         ack, ack_at, auto_cleared, resolved, resolved_at) in rows:
         s = SENSORS.get(sensor, {})
+        state = "resolved" if resolved else ("ack" if ack else "active")
         out.append({"id": aid, "sensor": sensor, "sensorName": s.get("name", sensor),
                     "gas": gas, "deptName": dept_name(s.get("dept")),
                     "type": atype, "level": level, "value": value,
                     "raised_at": raised_at, "acknowledged": bool(ack),
-                    "ack_at": ack_at, "auto_cleared": bool(auto_cleared)})
+                    "ack_at": ack_at, "auto_cleared": bool(auto_cleared),
+                    "state": state, "resolved_at": resolved_at})
     return {"alarms": out}
+
+
+@app.get("/api/report/monthly")
+def api_report_monthly(limit: int = 24):
+    """Monats-Aggregate aus den Stundenbuckets: je Monat Nl gesamt, je Gas, je
+    Abteilung (read-only, treibt den Reports-Bildschirm)."""
+    limit = max(1, min(int(limit), 60))
+    with db() as c:
+        rows = c.execute(
+            "SELECT strftime('%Y-%m', hour_ts, 'unixepoch', 'localtime') AS ym,"
+            " machine, SUM(nl) FROM hourly GROUP BY ym, machine ORDER BY ym").fetchall()
+    months: dict[str, dict] = {}
+    for ym, machine, nl in rows:
+        s = SENSORS.get(machine)
+        if not s or not s.get("gas"):
+            continue                       # nicht (mehr) zugeordnete Sensoren auslassen
+        m = months.setdefault(ym, {"ym": ym, "total_nl": 0.0,
+                                   "per_gas": {}, "per_dept_gas": {}})
+        m["total_nl"] += nl
+        m["per_gas"][s["gas"]] = m["per_gas"].get(s["gas"], 0.0) + nl
+        dg = m["per_dept_gas"].setdefault(s.get("dept") or "", {})
+        dg[s["gas"]] = dg.get(s["gas"], 0.0) + nl
+    out = sorted(months.values(), key=lambda m: m["ym"], reverse=True)[:limit]
+    for m in out:
+        m["total_nl"] = round(m["total_nl"], 1)
+        m["per_gas"] = {k: round(v, 1) for k, v in m["per_gas"].items()}
+        m["per_dept_gas"] = {d: {g: round(v, 1) for g, v in gg.items()}
+                             for d, gg in m["per_dept_gas"].items()}
+    return {"months": out}
 
 
 @app.post("/api/departments")

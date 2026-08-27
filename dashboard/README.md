@@ -3,36 +3,63 @@
 Kleines Backend (FastAPI + paho-mqtt + SQLite) + statisches Frontend. Liest die
 MQTT-Telemetrie der ESPHome-Durchflussmesser (Argon + Stickstoff), akkumuliert den
 Verbrauch in stündliche Buckets und zeigt KPIs, Verbrauchs-Trend, Alarme, Abteilungs-
-und Sensorübersicht. Oberfläche **Deutsch/Englisch** umschaltbar (Header, wird im
+und Sensorübersicht. Oberfläche **Deutsch/Englisch** umschaltbar (Sidebar, wird im
 Browser gemerkt).
+
+**Oberfläche (Redesign 2026-08, TUM-Look):** feste Sidebar mit den Bildschirmen
+
+- **Übersicht** – KPI-Zeile, Verbrauchs-Trend je Abteilung, aktive Alarme,
+  Abteilungs-Karten, Anlagen-Tabelle (Zeile → Anlagen-Ansicht)
+- **Abteilungen** → Abteilungs-Detail (Trend, Verbrauch je Anlage, Tabelle, Anteil am Werk)
+- **Anlagen** → Anlagen-Detail (Alarm-Banner mit Quittieren/Auflösen, Tages-/Stunden-
+  Chart, Alarm-Historie der Anlage, Geräte-Info inkl. IP/MAC/FW/SP, Schwellen, Notiz)
+- **Alarme** – Filter Aktiv/Quittiert/Aufgelöst, Dauer, Aktionen, 30-Tage-Statistik
+  (Anzahl, mittlere Lösungszeit, geschätzter Leck-Verlust), Log-Export
+- **Berichte** – Monats-Aggregate aus den Stundendaten (m³ je Gas, Kosten,
+  Vergleich zum Vormonat, CSV je Monat), Kosten je Abteilung, Inline-CSV-Export
+- **Administration** (nur mit Login) – Tabs Sensoren / Abteilungen /
+  Preise & Schwellen / MQTT-Broker / Login & System; „＋ Gerät hinzufügen“ öffnet den
+  Flasher (USB/OTA/MAC wie gehabt)
+- **TV-Modus** (`#/tv`, Link unten in der Sidebar) – dunkler Vollbild-Schirm für den
+  Hallenmonitor: Live-Durchfluss je Gas (24-h-Balken), Alarme, Abteilungs-Balken,
+  Laufband mit allen Anlagen. Klick beendet ihn.
+
+Gas-Filter, Zeitraum (24 h/7 d/30 d) und Einheit (m³/€) wirken auf alle Zahlen und
+Charts; alle Inhalte kommen live aus dem Backend (kein Platzhalter-Inhalt).
 
 ## Benutzer-Ebenen
 
 - **Ohne Anmeldung** (sobald ein Login-Passwort gesetzt ist): komplettes Dashboard
   **nur lesend** — Live-Status, Historie, Kosten, Alarme, Alarm-Historie und
   **CSV-Export**. Keine Änderungen möglich (Buttons ausgeblendet, API-seitig gesperrt).
-- **Angemeldet** (Login-Button → Passwort): zusätzlich Sensor-Manager, ⚙-Einstellungen,
-  „＋ Gerät“/Firmware, Alarm-Quittierung, Zähler-Reset, Backend-Neustart.
-- Login-Passwort setzen: ⚙ → **Dashboard-Login**. Ohne gesetztes Passwort ist alles
-  offen (Erstinbetriebnahme). Sessions halten 30 Tage; Passwortänderung meldet alle ab.
+- **Angemeldet** (Benutzer-Chip in der Sidebar → Passwort): zusätzlich die komplette
+  Administration (Sensoren, Abteilungen, Preise/Schwellen, Broker, Firmware),
+  Alarm-Quittieren/-Auflösen, Notizen, Zähler-Reset, Backend-Neustart.
+- Login-Passwort setzen: Administration → **Login & System**. Ohne gesetztes Passwort
+  ist alles offen (Erstinbetriebnahme). Sessions halten 30 Tage; Passwortänderung
+  meldet alle ab.
 
-**Konfiguration komplett im Dashboard:**
+**Konfiguration komplett im Dashboard (Administration):**
 
-- **Sensoren-Button** → Sensor-Manager: neue Geräte erscheinen automatisch als
-  „nicht zugeordnet“ und werden hier benannt und einem Gas + einer Abteilung
-  zugewiesen; pro Sensor **Notizfeld** (persistent, 📝 in der Tabelle),
-  Leck-Schwellen und Downtime-Fenster überschreibbar, Gesamtzähler-Reset,
-  Abteilungen anlegen/löschen. Die Geräte-Box zeigt IP (Link aufs
-  Geräte-Webinterface), SP-Wert, MAC, Firmware und bietet **Firmware-Update (OTA)**.
-- **＋ Gerät-Button** → Inbetriebnahme neuer Geräte mit How-To: Firmware bauen,
-  **Erstflash per USB im Browser** (ESP Web Tools, vendored), **MAC-Adresse auslesen**
-  (IT-Freischaltung). Nur Chrome/Edge über `http://localhost:8000` (Web Serial).
-- **Export-Button** → historische Verbrauchsdaten als **CSV**: Umfang (gesamt /
-  Abteilung / Anlage), Zeitraum von–bis, Auflösung Tag/Stunde. Semikolon-getrennt
-  mit Dezimalkomma → öffnet direkt in deutschem Excel.
-- **⚙-Button** → Einstellungen: MQTT-Broker (eingebettet/extern, Benutzer/Passwort —
-  **Klartext-Anzeige** per 👁), Gas-Preise €/m³, Offline-Schwelle, **Offline-Alarm**,
-  tägliches **Backup**, Standard-Leck-/Downtime-Regeln, Dashboard-Login,
+- **Tab Sensoren**: neue Geräte erscheinen automatisch als „nicht zugeordnet“ und
+  werden hier benannt und einem Gas + einer Abteilung zugewiesen; pro Sensor
+  **Notizfeld** (persistent, 📝 in der Tabelle, auch auf der Anlagen-Seite editierbar),
+  Leck-Schwellen und Downtime-Fenster überschreibbar, Gesamtzähler-Reset. Die
+  Geräte-Box zeigt IP (Link aufs Geräte-Webinterface), SP-Wert, MAC, Firmware und
+  bietet **Firmware-Update (OTA)**.
+- **Tab Abteilungen**: anlegen, umbenennen, löschen.
+- **„＋ Gerät hinzufügen“** (Kopfzeile) → Inbetriebnahme neuer Geräte mit How-To:
+  Firmware bauen, **Erstflash per USB im Browser** (ESP Web Tools, vendored),
+  **MAC-Adresse auslesen** (IT-Freischaltung). Nur Chrome/Edge über
+  `http://localhost:8000` (Web Serial).
+- **Export CSV** (Kopfzeile jedes Bildschirms, vorbelegt auf Abteilung/Anlage; auch
+  als Karte unter Berichte) → historische Verbrauchsdaten als **CSV**: Umfang
+  (gesamt / Abteilung / Anlage), Zeitraum von–bis, Auflösung Tag/Stunde.
+  Semikolon-getrennt mit Dezimalkomma → öffnet direkt in deutschem Excel.
+- **Tab Preise & Schwellen**: Gas-Preise €/m³, Offline-Schwelle, **Offline-Alarm**,
+  Standard-Leck-/Downtime-Regeln. **Tab MQTT-Broker**: eingebettet/extern,
+  Benutzer/Passwort (**Klartext-Anzeige** per 👁), secrets.yaml-Abgleich.
+  **Tab Login & System**: Dashboard-Login, tägliches **Backup**,
   **Backend-Neustart** per Klick.
 
 **Eingebetteter MQTT-Broker:** Das Backend bringt einen kleinen Broker (`amqtt`) mit
@@ -122,17 +149,19 @@ Das Backend abonniert **beide** Topic-Schemata und mappt sie auf dieselbe Sensor
 
 ## REST-API
 
-Öffentlich (read-only): `data`, `health`, `auth`, `login`, `export.csv`, `alarms/history`.
-Alles Ändernde sowie `config`/`sensors`/`firmware` verlangen den Login-Token
-(`X-Auth`-Header; ESP-Web-Tools-Downloads alternativ `?auth=`-Query).
+Öffentlich (read-only): `data`, `health`, `auth`, `login`, `export.csv`,
+`alarms/history`, `report/monthly`. Alles Ändernde sowie `config`/`sensors`/`firmware`
+verlangen den Login-Token (`X-Auth`-Header; ESP-Web-Tools-Downloads alternativ
+`?auth=`-Query).
 
 | Endpoint | Inhalt |
 |---|---|
-| `GET /api/data` | komplettes Dashboard-Payload (Sensoren inkl. Notiz, daily[30], hourly[24], live, Alarme) |
+| `GET /api/data` | komplettes Dashboard-Payload (Sensoren inkl. Notiz/Meta/Regeln, daily[30], hourly[24], hourly24 (rollierend), live, Alarme mit `state`) |
+| `GET /api/report/monthly` | Monats-Aggregate aus den Stundenbuckets (Nl je Monat, je Gas, je Abteilung×Gas) — Berichte-Bildschirm |
 | `GET /api/health` | Status, Anzahl Sensoren, Broker |
 | `GET /api/auth` · `POST /api/login` | Login-Status · Login (`{password}` → `{token}`) |
 | `GET /api/export.csv?scope=&res=&start=&end=` | CSV-Export (`scope`: `total`\|`dept:<id>`\|`sensor:<id>`, `res`: `day`\|`hour`, Datum `YYYY-MM-DD`) |
-| `GET /api/alarms/history` | Alarm-Historie (aktiv + quittiert + auto-aufgelöst) |
+| `GET /api/alarms/history` | Alarm-Historie (aktiv + quittiert + aufgelöst, `state` je Eintrag) |
 | `GET /api/sensors` | Registry inkl. Live-Status, Overrides, Defaults (Sensor-Manager) |
 | `POST /api/sensors/{id}` | Sensor ändern (`{name, note, gas, dept, leak, downtime}`; `null` = Standard) |
 | `POST /api/sensors/{id}/reset` · `/ota` | Zähler-Reset-Kommando · OTA-Update (IP aus meta) |
@@ -140,7 +169,8 @@ Alles Ändernde sowie `config`/`sensors`/`firmware` verlangen den Login-Token
 | `GET /api/firmware/manifest.json` · `…/factory.bin` | ESP-Web-Tools-Manifest + Factory-Image (Token nötig — Image enthält Secrets) |
 | `DELETE /api/sensors/{id}` | Registry-Eintrag löschen |
 | `POST /api/departments` · `DELETE /api/departments/{id}` | Abteilung anlegen/umbenennen/löschen |
-| `POST /api/alarms/{id}/ack` | Alarm quittieren |
+| `POST /api/alarms/{id}/ack` | Alarm quittieren (gesehen, bleibt gelistet) |
+| `POST /api/alarms/{id}/resolve` | Alarm auflösen (erledigt → Historie, Re-Arm-Regeln starten) |
 | `GET /api/config` · `POST /api/config` | Einstellungen lesen/schreiben (`config.json`; MQTT-Passwort im Klartext → Admin-only) |
 | `POST /api/restart` | Backend neu starten |
 | `GET /` | Dashboard (statisch) |
@@ -152,8 +182,13 @@ Alles Ändernde sowie `config`/`sensors`/`firmware` verlangen den Login-Token
   (`hourly`-Tabelle). Ein Zähler-**Reset** (neuer Wert < alter) wird als neue Basislinie
   behandelt (kein negativer Verbrauch).
 - Tag/Woche/Monat = Summen der Stundenbuckets; der CSV-Export liest dieselben Buckets.
-- **Alarme** (Standard in ⚙, pro Sensor überschreibbar) werden minütlich im Backend
-  ausgewertet — auch ohne offenes Dashboard:
+- **Alarme** (Standard in der Administration, pro Sensor überschreibbar) werden
+  minütlich im Backend ausgewertet — auch ohne offenes Dashboard. Lebenszyklus
+  **AKTIV → QUITTIERT → AUFGELÖST**: Quittieren heißt „gesehen, Ursache besteht
+  weiter“ (Alarm bleibt gelistet und aktualisiert seinen Wert), Auflösen heißt
+  „erledigt“ (wandert in die Historie; erst danach greifen die Re-Arm-Regeln:
+  Leck/Mehrverbrauch frühestens nach 6 h wieder, Downtime nach erneutem
+  Mehrverbrauch, Offline erst wenn das Gerät zwischenzeitlich online war):
   - *Mehrverbrauch*: Mittel der letzten 7 vollen Tage vs. der 21 Tage davor
     (> 15 % Warnung, > 30 % kritisch).
   - *Leerlauf/Leck*: Anlage online, Durchfluss zwischen `leak.min` und `leak.active` Nl/min.
@@ -164,9 +199,11 @@ Alles Ändernde sowie `config`/`sensors`/`firmware` verlangen den Login-Token
 
 ## Hinweise
 
-- Einheiten-Umschaltung **m³ ↔ €**, Bereich **24 h / 7 d / 30 d**, Sprache **DE/EN**
-  und Theme rein im Frontend (werden im Browser gemerkt).
-- Klick auf Abteilung, Sensorzeile oder Alarm fokussiert den Chart.
+- Einheiten-Umschaltung **m³ ↔ €**, Bereich **24 h / 7 d / 30 d** und Sprache
+  **DE/EN** rein im Frontend (werden im Browser gemerkt). **24 h** ist ein
+  rollierendes Fenster bis zur laufenden Stunde.
+- Klick auf Abteilungs-Karte/-Zeile öffnet die Abteilung, Klick auf eine
+  Anlagen-Zeile oder einen Alarm die Anlagen-Ansicht.
 - `total` ist in **Nl** (Normliter); m³ = Nl/1000. Preise als €/m³ pro Gas in ⚙.
 - Fällt das Backend aus, zeigt das Dashboard einen roten Hinweis mit dem Zeitpunkt des
   letzten erfolgreichen Datenabrufs.
