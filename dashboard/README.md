@@ -50,8 +50,9 @@ Charts; alle Inhalte kommen live aus dem Backend (kein Platzhalter-Inhalt).
 - **Tab Abteilungen**: anlegen, umbenennen, löschen.
 - **„＋ Gerät hinzufügen“** (Kopfzeile) → Inbetriebnahme neuer Geräte mit How-To:
   Firmware bauen, **Erstflash per USB im Browser** (ESP Web Tools, vendored),
-  **MAC-Adresse auslesen** (IT-Freischaltung). Nur Chrome/Edge über
-  `http://localhost:8000` (Web Serial).
+  **MAC-Adresse auslesen** (IT-Freischaltung). Web Serial gibt es nur in Chrome/Edge
+  und nur in einem sicheren Kontext (`https://` oder `localhost`); sonst erklärt der
+  Dialog die Optionen (Chrome-Flag, HTTPS, `factory.bin` + esptool).
 - **Export CSV** (Kopfzeile jedes Bildschirms, vorbelegt auf Abteilung/Anlage; auch
   als Karte unter Berichte) → historische Verbrauchsdaten als **CSV**: Umfang
   (gesamt / Abteilung / Anlage), Zeitraum von–bis, Auflösung Tag/Stunde.
@@ -109,7 +110,7 @@ dashboard/
 
 ```bash
 cd dashboard/backend
-pip install -r requirements.txt          # fastapi, uvicorn, paho-mqtt, amqtt
+pip install -r requirements.txt          # fastapi, uvicorn, paho-mqtt, amqtt, esphome (Firmware-Build/OTA)
 python app.py                            # Broker :1883 + Server auf http://127.0.0.1:8000
 ```
 → Browser auf **http://127.0.0.1:8000**. Alle Daten kommen von den echten Geräten;
@@ -118,6 +119,24 @@ ohne verbundene Geräte bleiben Trend und Live-Werte leer.
 > **Windows:** `127.0.0.1` statt `localhost` verwenden — uvicorn bindet nur IPv4.
 > Ohne `amqtt` startet das Backend trotzdem (eingebetteter Broker aus → externen Broker
 > in ⚙/`config.json` eintragen). Ohne `paho-mqtt` läuft nur die DB-Auslieferung.
+
+**esphome** muss im **selben Python** installiert sein, mit dem `app.py` läuft (Build und
+OTA starten `python -m esphome` als Subprozess). Fehlt es, ist „Firmware bauen“ im Dialog
+„＋ Gerät“ gesperrt; der Dialog zeigt den Interpreter-Pfad und bietet die Installation per
+Button an (`pip install esphome==…`, Version aus `requirements.txt`). Der erste Build lädt
+die PlatformIO-Toolchains nach (Internetzugang, 5–10 min).
+
+**HTTPS (optional):** Browser erlauben **Web Serial** (USB-Flash/MAC-Konsole im Dialog
+„＋ Gerät“) nur in einem sicheren Kontext — `https://` oder `localhost`. Läuft das Dashboard
+auf einem Server, entweder pro Flash-PC das Chrome/Edge-Flag
+`chrome://flags/#unsafely-treat-insecure-origin-as-secure` mit der Dashboard-URL setzen,
+oder das Backend per HTTPS ausliefern: in `config.json` unter `"https"` `certfile` und
+`keyfile` eintragen (Pfade relativ zu `backend/`). Selbstsigniert z. B.:
+```bash
+openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -keyout key.pem -out cert.pem -subj "/CN=10.157.124.20" -addext "subjectAltName=IP:10.157.124.20"
+```
+Selbstsignierte Zertifikate bringen im Browser einmalig eine Warnung; ein von der IT
+ausgestelltes Zertifikat vermeidet sie. Die Geräte (MQTT :1883) sind davon nicht betroffen.
 
 ## Echtbetrieb
 
@@ -176,7 +195,7 @@ verlangen den Login-Token (`X-Auth`-Header; ESP-Web-Tools-Downloads alternativ
 | `GET /api/sensors` | Registry inkl. Live-Status, Overrides, Defaults (Sensor-Manager) |
 | `POST /api/sensors/{id}` | Sensor ändern (`{name, note, gas, dept, leak, downtime}`; `null` = Standard) |
 | `POST /api/sensors/{id}/reset` · `/ota` | Zähler-Reset-Kommando · OTA-Update (IP aus meta) |
-| `GET /api/firmware` · `POST /api/firmware/build` | Build-/Job-Status (inkl. `secrets_problems`, `esphome`) · Firmware bauen (400 mit Klartext, wenn `secrets.yaml` unvollständig) |
+| `GET /api/firmware` · `POST /api/firmware/build` · `POST /api/firmware/install-esphome` | Build-/Job-Status (inkl. `secrets_problems`, `esphome`, `python`) · Firmware bauen (400 mit Klartext, wenn `secrets.yaml` unvollständig; 500, wenn esphome fehlt) · esphome per pip installieren (Job) |
 | `GET /api/firmware/manifest.json` · `…/factory.bin` | ESP-Web-Tools-Manifest + Factory-Image (Token nötig — Image enthält Secrets) |
 | `DELETE /api/sensors/{id}` | Registry-Eintrag löschen |
 | `POST /api/departments` · `DELETE /api/departments/{id}` | Abteilung anlegen/umbenennen/löschen |

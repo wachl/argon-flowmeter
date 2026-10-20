@@ -52,7 +52,7 @@ Es gibt **eine Einheits-Firmware für alle Geräte** (`firmware/gas-flowmeter.ya
 ```bash
 git clone https://github.com/wachl/argon-flowmeter.git
 cd argon-flowmeter/dashboard/backend
-pip install -r requirements.txt
+pip install -r requirements.txt   # enthält esphome (Firmware-Build/OTA); erster Build lädt Toolchains → Internet, 5–10 min
 python app.py        # Web :8000 + MQTT-Broker :1883; config.json entsteht beim Erststart aus config.json.example
 ```
 
@@ -66,7 +66,11 @@ python app.py        # Web :8000 + MQTT-Broker :1883; config.json entsteht beim 
 5. Prüfen: beide Geräte „online“, Zählerstände unverändert (OTA fasst den NVS-Zähler nicht an).
 
 **Wichtige Einschränkungen:**
-- Der **USB-Erstflash im Browser** (ESP Web Tools) funktioniert nur in **Chrome/Edge auf `http://localhost:8000`** (Web-Serial). Von der VM aus geht das nicht — neue Geräte flashst du am einfachsten mit dem **Factory-Image vom Server**: im Dialog „＋ Gerät“ auf der VM bauen, `factory.bin` herunterladen und am PC per USB flashen (`python -m esptool --chip esp32 write_flash 0x0 gas-flowmeter.factory.bin`; esptool ist in `pip install esphome` enthalten). Alternativ per CLI aus `firmware/`: `esphome run gas-flowmeter.yaml` — dann muss die lokale `secrets.yaml` dieselben Werte haben wie auf dem Server (Administration → Firmware-Secrets).
+- Der **USB-Erstflash im Browser** (ESP Web Tools) braucht **Web Serial**, und das erlauben Browser nur in einem **sicheren Kontext** (`https://` oder `localhost`) — über `http://10.157.124.20:8000` zeigt der Dialog deshalb statt der USB-Buttons einen Hinweis. Das Board hängt dabei immer am PC mit dem Browser, nie am Server. Drei Wege:
+  1. **Chrome/Edge-Flag** (schnellster Weg, einmal pro PC): `chrome://flags/#unsafely-treat-insecure-origin-as-secure` öffnen, `http://10.157.124.20:8000` eintragen, auf „Enabled“ stellen, Browser neu starten → USB-Flash und MAC-Konsole gehen direkt von deinem PC.
+  2. **HTTPS** für das Dashboard: in `dashboard/backend/config.json` unter `"https"` `certfile`/`keyfile` eintragen (Rezept in `dashboard/README.md` → Start; mit der IT ggf. ein echtes Zertifikat, sonst selbstsigniert mit einmaliger Browser-Warnung).
+  3. Ohne Browser: im Dialog „＋ Gerät“ auf dem Server bauen, **`factory.bin` herunterladen** und am PC per USB flashen (`python -m esptool --chip esp32 write_flash 0x0 gas-flowmeter.factory.bin`; esptool ist in esphome enthalten). Alternativ per CLI aus `firmware/`: `esphome run gas-flowmeter.yaml` — dann muss die lokale `secrets.yaml` dieselben Werte haben wie auf dem Server (Administration → Firmware-Secrets).
+- **esphome muss im Python des Backends installiert sein** (`pip install -r requirements.txt` enthält es seit diesem Stand). Fehlt es, ist „Firmware bauen“ gesperrt und der Dialog zeigt den Interpreter-Pfad plus einen Button, der die Installation per pip anstößt (Log im Dialog).
 - **Kein TLS** (MQTT und Dashboard-HTTP): Schutz gegen versehentliche LAN-Clients, nicht gegen Mitschneiden. Mit der IT klären: eigenes Netz-Segment und/oder Reverse-Proxy mit HTTPS vor Port 8000.
 - Tägliche **Backups** landen in `dashboard/backend/backups/JJJJ-MM-TT/` (Rotation 30 Tage) — auf der VM verifizieren und idealerweise zusätzlich extern wegsichern (VM-Snapshot o. ä.).
 

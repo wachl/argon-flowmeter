@@ -788,7 +788,7 @@ _esphome_cache: dict = {"ok": None, "ts": 0.0}
 
 def esphome_available() -> bool:
     """Ist das esphome-Python-Paket im Interpreter des Backends installiert?"""
-    if time.time() - _esphome_cache["ts"] < 60 and _esphome_cache["ok"] is not None:
+    if time.time() - _esphome_cache["ts"] < 15 and _esphome_cache["ok"] is not None:
         return _esphome_cache["ok"]
     try:
         ok = importlib.util.find_spec("esphome") is not None
@@ -796,6 +796,18 @@ def esphome_available() -> bool:
         ok = False
     _esphome_cache.update(ok=ok, ts=time.time())
     return ok
+
+
+def _esphome_requirement() -> str:
+    """esphome-Pin aus requirements.txt (eine Quelle der Wahrheit fuer die Version)."""
+    try:
+        for line in (BASE / "requirements.txt").read_text(encoding="utf-8").splitlines():
+            spec = line.split("#", 1)[0].strip()
+            if re.match(r"^esphome\b", spec, re.I):
+                return spec
+    except OSError:
+        pass
+    return "esphome"
 
 
 _lan_ip_cache: dict = {"ip": None, "ts": 0.0}
@@ -840,12 +852,13 @@ _fw_job: dict = {"type": None, "target": None, "running": False, "ok": None,
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 
-def _fw_run_job(jtype: str, args: list[str], target: str | None, timeout: int) -> None:
-    """esphome-Subprozess ausfuehren und Ausgabe in das Job-Log spiegeln."""
+def _fw_run_job(jtype: str, args: list[str], target: str | None, timeout: int,
+                module: str = "esphome") -> None:
+    """Subprozess (python -m <module> ...) ausfuehren und Ausgabe in das Job-Log spiegeln."""
     ok = False
     try:
         proc = subprocess.Popen(
-            [sys.executable, "-m", "esphome", *args],
+            [sys.executable, "-m", module, *args],
             cwd=str(FIRMWARE_DIR), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, encoding="utf-8", errors="replace",
         )
@@ -860,10 +873,13 @@ def _fw_run_job(jtype: str, args: list[str], target: str | None, timeout: int) -
     except Exception as exc:                           # noqa: BLE001
         _fw_job["log"].append(f"[fehler] {exc}")
     _fw_job.update(running=False, ok=ok, finished=int(time.time()))
+    if jtype == "install":
+        _esphome_cache.update(ok=None, ts=0.0)      # Verfuegbarkeit neu pruefen
     print(f"[firmware] Job {jtype} ({target or '-'}) beendet: {'OK' if ok else 'FEHLER'}")
 
 
-def start_fw_job(jtype: str, args: list[str], target: str | None, timeout: int) -> bool:
+def start_fw_job(jtype: str, args: list[str], target: str | None, timeout: int,
+                 module: str = "esphome") -> bool:
     """Job starten; False, wenn bereits einer laeuft."""
     with _fw_lock:
         if _fw_job["running"]:
@@ -871,8 +887,8 @@ def start_fw_job(jtype: str, args: list[str], target: str | None, timeout: int) 
         _fw_job.update(type=jtype, target=target, running=True, ok=None,
                        started=int(time.time()), finished=None)
         _fw_job["log"].clear()
-        _fw_job["log"].append(f"[start] esphome {' '.join(args)}")
-    threading.Thread(target=_fw_run_job, args=(jtype, args, target, timeout),
+        _fw_job["log"].append(f"[start] {module} {' '.join(args)}")
+    threading.Thread(target=_fw_run_job, args=(jtype, args, target, timeout, module),
                      daemon=True).start()
     return True
 
@@ -886,6 +902,8 @@ def fw_info() -> dict:
     return {
         "yaml_exists": FIRMWARE_YAML.exists(),
         "esphome": esphome_available(),
+        "esphome_req": _esphome_requirement(),
+        "python": sys.executable,
         "secrets_problems": secrets_problems(),
         "factory": _bin(FW_FACTORY_BIN),
         "ota": _bin(FW_OTA_BIN),
@@ -1273,8 +1291,9 @@ def api_firmware_build(req: Request):
     if not FIRMWARE_YAML.exists():
         return JSONResponse({"ok": False, "error": f"{FIRMWARE_YAML} fehlt"}, status_code=500)
     if not esphome_available():
-        return JSONResponse({"ok": False, "error": "esphome ist auf dem Dashboard-Server nicht "
-                             "installiert — im Backend-Python: pip install esphome"},
+        return JSONResponse({"ok": False, "error": "esphome ist im Backend-Python nicht installiert — "
+                             "Button „esphome installieren“ oder: "
+                             f"{sys.executable} -m pip install {_esphome_requirement()}"},
                             status_code=500)
     ensure_secrets()                 # fehlende Werte erzeugen, MQTT-Zugangsdaten spiegeln
     problems = secrets_problems()
@@ -1284,6 +1303,23 @@ def api_firmware_build(req: Request):
                              + " → Administration → MQTT-Broker → Firmware-Secrets"},
                             status_code=400)
     if not start_fw_job("build", ["compile", FIRMWARE_YAML.name], None, timeout=900):
+        return JSONResponse({"ok": False, "error": "es läuft bereits ein Job"}, status_code=409)
+    return {"ok": True}
+
+
+@app.post("/api/firmware/install-esphome")
+def api_firmware_install(req: Request):
+    """esphome per pip in den Interpreter des Backends installieren (Job mit Log).
+
+    Gleiche Aktion wie `pip install -r requirements.txt` — fuer Server, auf denen
+    das Backend schon lief, bevor esphome in requirements.txt stand.
+    """
+    if not is_admin(req):
+        return deny()
+    if esphome_available():
+        return JSONResponse({"ok": False, "error": "esphome ist bereits installiert"}, status_code=400)
+    if not start_fw_job("install", ["install", _esphome_requirement()], None,
+                        timeout=1200, module="pip"):
         return JSONResponse({"ok": False, "error": "es läuft bereits ein Job"}, status_code=409)
     return {"ok": True}
 
@@ -1792,6 +1828,26 @@ def _backup_loop() -> None:
 app.mount("/", StaticFiles(directory=str(FRONTEND), html=True), name="frontend")
 
 
+def _ssl_kwargs() -> dict:
+    """Optionales HTTPS: config.json "https": {"certfile", "keyfile"} (Pfade relativ zu backend/).
+
+    Browser erlauben Web Serial (USB-Flash und MAC-Konsole im Dialog "+ Geraet") nur
+    in sicheren Kontexten (https:// oder localhost). Laeuft das Dashboard auf einem
+    Server, geht das Flashen von anderen PCs aus also nur per HTTPS — oder mit dem
+    Chrome-Flag #unsafely-treat-insecure-origin-as-secure auf dem jeweiligen PC.
+    """
+    h = CONFIG.get("https") or {}
+    cert, key = str(h.get("certfile") or "").strip(), str(h.get("keyfile") or "").strip()
+    if not cert or not key:
+        return {}
+    cp, kp = BASE / cert, BASE / key
+    if not (cp.exists() and kp.exists()):
+        print(f"[https] Zertifikat/Key nicht gefunden ({cp} / {kp}) — starte mit HTTP")
+        return {}
+    print(f"[https] aktiv: {cp.name} / {kp.name}")
+    return {"ssl_certfile": str(cp), "ssl_keyfile": str(kp)}
+
+
 if __name__ == "__main__":
     load_sensors()
     _ensure_auth_secret()
@@ -1802,4 +1858,4 @@ if __name__ == "__main__":
     threading.Thread(target=_alarm_loop, daemon=True).start()
     threading.Thread(target=_backup_loop, daemon=True).start()
     port = int(os.environ.get("PORT", CONFIG.get("port", 8000)))
-    uvicorn.run(app, host=CONFIG.get("host", "0.0.0.0"), port=port)
+    uvicorn.run(app, host=CONFIG.get("host", "0.0.0.0"), port=port, **_ssl_kwargs())

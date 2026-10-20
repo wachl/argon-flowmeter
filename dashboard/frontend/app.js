@@ -154,7 +154,8 @@
     saveHint:'Preise/Schwellen greifen sofort · Broker-Änderungen nach Neustart',
     // Flasher
     titleDevice:'Neues Gerät flashen · Firmware bauen · MAC auslesen',
-    serialHint:'USB-Flashen & MAC-Auslesen gehen nur in <b>Chrome/Edge</b> direkt am Dashboard-PC über <span class="mono">http://localhost:8000</span>. Alternative: <span class="mono">esphome run gas-flowmeter.yaml</span> im firmware/-Ordner.',
+    serialInsecure:'<b>USB-Flashen & MAC-Auslesen im Browser (Web Serial)</b> erlaubt der Browser nur in einem sicheren Kontext — <span class="mono">https://</span> oder <span class="mono">localhost</span>, nicht über <span class="mono">{0}</span>. Das Board hängt dabei immer am PC, auf dem der Browser läuft (nicht am Server). Drei Wege:<br>① <b>Chrome/Edge-Flag</b> (einmalig pro PC): <span class="mono">chrome://flags/#unsafely-treat-insecure-origin-as-secure</span> öffnen, <span class="mono">{0}</span> eintragen, auf „Enabled“ stellen, Browser neu starten — danach erscheinen hier die USB-Buttons.<br>② Dashboard per <b>HTTPS</b> ausliefern (config.json → <span class="mono">https</span>, siehe dashboard/README.md).<br>③ Ohne Browser: <b>factory.bin</b> unten herunterladen und per esptool flashen.',
+    serialUnsupported:'Dieser Browser unterstützt kein <b>Web Serial</b> — für USB-Flashen & MAC-Auslesen <b>Chrome oder Edge</b> verwenden, oder factory.bin unten herunterladen und per esptool flashen.',
     howto:'So kommt ein neues Gerät in die Messung',
     step1:'Unten prüfen, ob ein aktueller <b>Firmware-Build</b> vorhanden ist — sonst „Firmware bauen“ (einmal pro Firmware-Stand).',
     step2:'ESP32-POE2 per <b>USB-C an diesen PC</b> anschließen. <b style="color:var(--danger)">⚠ Niemals USB und PoE gleichzeitig</b> — das Board ist nicht galvanisch isoliert!',
@@ -168,7 +169,9 @@
     fwRunning:'⏳ {0} läuft …', fwOkJob:'✓ letzter Job ({0}) erfolgreich', fwFailJob:'✗ letzter Job ({0}) fehlgeschlagen',
     fwNoApi:'Firmware-Status nicht ladbar — läuft das Backend auf dem Dashboard-PC?',
     fwBlocked:'⚠ Build nicht möglich: {0} — Administration → MQTT-Broker → Firmware-Secrets',
-    fwNoEsphome:'✗ esphome ist auf dem Dashboard-Server nicht installiert (im Backend-Python: pip install esphome).',
+    fwNoEsphome:'✗ esphome ist im Python des Dashboard-Servers nicht installiert — deshalb ist „Firmware bauen“ gesperrt.',
+    fwInstallHint:'Das Backend läuft mit <span class="mono">{0}</span>. Dort installieren: <span class="mono">{0} -m pip install {1}</span> (entspricht <span class="mono">pip install -r requirements.txt</span>) — oder per Button, gleiche Aktion mit Log unten (~2–5 min). Wichtig: derselbe Interpreter wie der laufende Dienst (venv/systemd).',
+    fwInstallBtn:'esphome jetzt installieren (pip)',
     fwDownload:'factory.bin herunterladen',
     fwDlHint:'Ohne Web-Serial (z. B. Dashboard auf einem Server): Image herunterladen und am PC per USB flashen — <span class="mono">python -m esptool --chip esp32 write_flash 0x0 gas-flowmeter.factory.bin</span> (esptool ist in esphome enthalten).',
     flashBox:'Erstflash per USB', flashBtn:'Firmware flashen (USB)', flashModFail:'Flash-Modul (vendor/esp-web-tools) nicht ladbar.', flashModLoad:'Flash-Modul lädt …',
@@ -177,7 +180,7 @@
     macHint:'Liest die USB-Konsole des geflashten Boards; die MAC steht später auch im Sensor-Manager.',
     macCopy:'kopieren', macCopied:'MAC kopiert ✓', macCopyFail:'Kopieren fehlgeschlagen: ', macSubmit:'→ diese Ethernet-MAC bei der IT zur Freischaltung einreichen',
     macWait:'— warte auf Ausgabe (Board wird resettet) —', serialErr:'Serielle Verbindung: ', serialLost:'[Verbindung getrennt: {0}]',
-    jobBuild:'Build', jobOta:'OTA → {0}', buildRunningErr:'es läuft bereits ein Job',
+    jobBuild:'Build', jobOta:'OTA → {0}', jobInstall:'esphome-Installation (pip)', buildRunningErr:'es läuft bereits ein Job',
     // Login
     titleLogin:'Anmelden', loginInfo:'Ohne Anmeldung ist das Dashboard nur lesbar.', loginBtn:'Anmelden', loginWrong:'Falsches Passwort',
     loginRequired:'Anmeldung erforderlich', loginFirst:'Bitte zuerst anmelden.',
@@ -319,7 +322,8 @@
     restarting:'Backend restarting …', backOnline:'Backend back online ✓', restartTimeout:'Backend did not come back — check the console on the dashboard PC.',
     saveHint:'Prices/thresholds apply immediately · broker changes after restart',
     titleDevice:'Flash new device · build firmware · read MAC',
-    serialHint:'USB flashing & MAC reading only work in <b>Chrome/Edge</b> directly on the dashboard PC via <span class="mono">http://localhost:8000</span>. Alternative: <span class="mono">esphome run gas-flowmeter.yaml</span> in the firmware/ folder.',
+    serialInsecure:'<b>USB flashing & MAC reading in the browser (Web Serial)</b> are only allowed in a secure context — <span class="mono">https://</span> or <span class="mono">localhost</span>, not via <span class="mono">{0}</span>. The board is always attached to the PC running the browser (not to the server). Three options:<br>① <b>Chrome/Edge flag</b> (once per PC): open <span class="mono">chrome://flags/#unsafely-treat-insecure-origin-as-secure</span>, enter <span class="mono">{0}</span>, set to “Enabled”, restart the browser — the USB buttons then appear here.<br>② Serve the dashboard via <b>HTTPS</b> (config.json → <span class="mono">https</span>, see dashboard/README.md).<br>③ Without a browser: download <b>factory.bin</b> below and flash it with esptool.',
+    serialUnsupported:'This browser has no <b>Web Serial</b> support — use <b>Chrome or Edge</b> for USB flashing & MAC reading, or download factory.bin below and flash it with esptool.',
     howto:'How a new device joins the measurement',
     step1:'Check below that a current <b>firmware build</b> exists — otherwise click “Build firmware” (once per firmware revision).',
     step2:'Connect the ESP32-POE2 via <b>USB-C to this PC</b>. <b style="color:var(--danger)">⚠ Never USB and PoE at the same time</b> — the board is not galvanically isolated!',
@@ -333,7 +337,9 @@
     fwRunning:'⏳ {0} running …', fwOkJob:'✓ last job ({0}) succeeded', fwFailJob:'✗ last job ({0}) failed',
     fwNoApi:'Firmware status not available — is the backend running on the dashboard PC?',
     fwBlocked:'⚠ Build not possible: {0} — Administration → MQTT broker → Firmware secrets',
-    fwNoEsphome:'✗ esphome is not installed on the dashboard server (in the backend Python: pip install esphome).',
+    fwNoEsphome:'✗ esphome is not installed in the dashboard server’s Python — that is why “Build firmware” is locked.',
+    fwInstallHint:'The backend runs with <span class="mono">{0}</span>. Install there: <span class="mono">{0} -m pip install {1}</span> (same as <span class="mono">pip install -r requirements.txt</span>) — or use the button, same action with the log below (~2–5 min). It must be the same interpreter as the running service (venv/systemd).',
+    fwInstallBtn:'Install esphome now (pip)',
     fwDownload:'Download factory.bin',
     fwDlHint:'Without Web Serial (e.g. dashboard on a server): download the image and flash it via USB on your PC — <span class="mono">python -m esptool --chip esp32 write_flash 0x0 gas-flowmeter.factory.bin</span> (esptool ships with esphome).',
     flashBox:'First flash via USB', flashBtn:'Flash firmware (USB)', flashModFail:'Flash module (vendor/esp-web-tools) failed to load.', flashModLoad:'Flash module loading …',
@@ -342,7 +348,7 @@
     macHint:'Reads the USB console of the flashed board; the MAC also appears later in the sensor manager.',
     macCopy:'copy', macCopied:'MAC copied ✓', macCopyFail:'Copy failed: ', macSubmit:'→ submit this Ethernet MAC to IT for approval',
     macWait:'— waiting for output (board is being reset) —', serialErr:'Serial connection: ', serialLost:'[connection lost: {0}]',
-    jobBuild:'Build', jobOta:'OTA → {0}', buildRunningErr:'a job is already running',
+    jobBuild:'Build', jobOta:'OTA → {0}', jobInstall:'esphome installation (pip)', buildRunningErr:'a job is already running',
     titleLogin:'Sign in', loginInfo:'Without signing in the dashboard is read-only.', loginBtn:'Sign in', loginWrong:'Wrong password',
     loginRequired:'Sign-in required', loginFirst:'Please sign in first.',
     regLoadFail:'Sensor list not loadable: ', cfgLoadFail:'Configuration not loadable: ', histLoadFail:'History not loadable: ',
@@ -1979,18 +1985,23 @@
     const build=fw.factory
       ? t('fwFrom', esc(dt(fw.factory.mtime)), (fw.factory.size/1024).toFixed(0))
       : t('fwNone');
-    const jobName=job.type==='build'?t('jobBuild'):t('jobOta',esc(job.target||''));
+    const jobName=job.type==='build'?t('jobBuild'):job.type==='install'?t('jobInstall'):t('jobOta',esc(job.target||''));
     const jstate=job.running
       ? `<span style="color:var(--brand)">${t('fwRunning',jobName)}</span>`
       : job.ok===true ? `<span style="color:var(--good)">${esc(t('fwOkJob',job.type||''))}</span>`
       : job.ok===false ? `<span style="color:var(--danger)">${esc(t('fwFailJob',job.type||''))}</span>` : '';
-    const blocked = fw.esphome===false ? t('fwNoEsphome')
+    const noEsp = fw.esphome===false;
+    const blocked = noEsp ? t('fwNoEsphome')
       : (fw.secrets_problems&&fw.secrets_problems.length) ? t('fwBlocked', fw.secrets_problems.join(' · ')) : '';
+    const blockedBox = !blocked ? '' :
+      `<div style="background:var(--warn-bg2);border:1px solid var(--warn-border);border-radius:8px;padding:9px 12px;font-size:12px;color:var(--warn);font-weight:600;margin-top:8px;line-height:1.5">${esc(blocked)}
+        ${noEsp?`<div style="margin-top:5px;font-weight:500">${t('fwInstallHint', esc(fw.python||'python'), esc(fw.esphome_req||'esphome'))}</div>
+        <div style="margin-top:8px"><button data-action="fw-install" class="btn" ${job.running?'disabled':''}>${esc(t('fwInstallBtn'))}</button></div>`:''}</div>`;
     const log=(job.log&&job.log.length)?`<pre id="fw-log" style="margin:8px 0 0;background:#f7f9fc;border:1px solid var(--border);border-radius:7px;padding:8px 10px;font-size:10.5px;line-height:1.45;color:var(--dim);max-height:150px;overflow:auto;white-space:pre-wrap;font-family:var(--mono)">${job.log.map(esc).join('\n')}</pre>`:'';
     return `<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--dim)">
-        <button data-action="fw-build" class="btn" ${(job.running||blocked)?'disabled':''}>${esc(t('fwBuild'))}</button>
+        <button data-action="fw-build" class="btn" ${(job.running||blocked)?'disabled':''} title="${esc(blocked)}">${esc(t('fwBuild'))}</button>
         <span>${build}</span><span class="mono" style="font-size:11.5px">${jstate}</span>
-      </div>${blocked?`<div style="margin-top:8px;font-size:12px;color:var(--danger);font-weight:600">${esc(blocked)}</div>`:''}${log}`;
+      </div>${blockedBox}${log}`;
   }
 
   function flasherHTML(){
@@ -1999,7 +2010,7 @@
       <span style="font-size:12.5px;line-height:1.5">${txt}</span></div>`;
     const box='border:1px solid var(--border);border-radius:9px;padding:13px 14px';
     const serialHint = serialOk() ? '' :
-      `<div style="background:var(--warn-bg2);border:1px solid var(--warn-border);border-radius:8px;padding:9px 12px;font-size:12px;color:var(--warn);font-weight:600;margin-bottom:10px">${t('serialHint')}</div>`;
+      `<div style="background:var(--warn-bg2);border:1px solid var(--warn-border);border-radius:8px;padding:9px 12px;font-size:12px;color:var(--warn);font-weight:500;line-height:1.55;margin-bottom:10px">${window.isSecureContext ? t('serialUnsupported') : t('serialInsecure', esc(location.origin))}</div>`;
     const manifest='api/firmware/manifest.json'+(TOKEN?('?auth='+encodeURIComponent(TOKEN)):'');
     const dlBtn = (M.fw&&M.fw.factory)
       ? `<a href="api/firmware/factory.bin${TOKEN?('?auth='+encodeURIComponent(TOKEN)):''}" download="gas-flowmeter.factory.bin" class="btn" style="text-decoration:none">${esc(t('fwDownload'))}</a>`
@@ -2281,6 +2292,9 @@
     // ---- Firmware / Flasher
     else if(act==='fw-build'){
       try{ await api('api/firmware/build',{method:'POST'}); M.fw=await api('api/firmware'); renderModal(); }
+      catch(err){ setModalMsg(t('err')+err.message,true); } return; }
+    else if(act==='fw-install'){
+      try{ await api('api/firmware/install-esphome',{method:'POST'}); M.fw=await api('api/firmware'); renderModal(); }
       catch(err){ setModalMsg(t('err')+err.message,true); } return; }
     else if(act==='mac-console'){ macConsoleStart(); return; }
     else if(act==='mac-console-stop'){ macConsoleStop(); return; }

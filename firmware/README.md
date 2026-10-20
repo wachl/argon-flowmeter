@@ -28,9 +28,11 @@ Stromausfall und OTA-Updates. Die Firmware ist **gas-neutral**: welches Gas
 
 ## Setup
 
-1. **ESPHome installieren** (CLI reicht):
+1. **ESPHome installieren** (CLI reicht; im Dashboard-Backend ist es über
+   `dashboard/backend/requirements.txt` bereits enthalten — gleiche Version nehmen,
+   die Firmware ist damit verifiziert):
    ```bash
-   pip install esphome
+   pip install esphome==2026.6.2
    ```
 2. **Secrets (`secrets.yaml`):** Läuft das Dashboard-Backend auf demselben Rechner,
    ist **nichts zu tun** — es legt die Datei beim Start selbst an (Broker = LAN-IP,

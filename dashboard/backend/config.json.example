@@ -21,6 +21,7 @@
       ]
     }
   },
+  "https": { "certfile": "", "keyfile": "" },
   "mqtt": {
     "embedded": true,
     "bind": "0.0.0.0",
