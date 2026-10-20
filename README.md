@@ -45,8 +45,9 @@ wird im Dashboard zugeordnet.
   Sensor-Manager + ⚙-Einstellungen komplett im Frontend.
 - ✅ Produktivbetrieb-Features: Benutzer-Ebene (ohne Login nur lesend), UI DE/EN,
   CSV-Export (Anlage/Abteilung/gesamt), Sensor-Notizen, Offline-Alarme mit
-  Auto-Auflösung, Alarm-Historie, MQTT-Zugangsdaten-Abgleich mit
-  `firmware/secrets.yaml`, tägliches Backup, Backend-Neustart per Klick.
+  Auto-Auflösung, Alarm-Historie, `firmware/secrets.yaml` vom Backend verwaltet
+  (Auto-Anlage, Pflege in der Administration, Build-Vorprüfung), tägliches Backup,
+  Backend-Neustart per Klick.
 - ⏳ Offen pro Anlage: SFAH-Variante/Max-Durchfluss → SP, Normbedingung, reale
   Anlagennamen (im Dashboard zuweisbar).
 - ⏳ Offen Betrieb: Autostart nach Windows-Reboot (Taskplaner/NSSM) für die

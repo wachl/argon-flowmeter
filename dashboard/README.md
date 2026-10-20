@@ -58,7 +58,8 @@ Charts; alle Inhalte kommen live aus dem Backend (kein Platzhalter-Inhalt).
   Semikolon-getrennt mit Dezimalkomma → öffnet direkt in deutschem Excel.
 - **Tab Preise & Schwellen**: Gas-Preise €/m³, Offline-Schwelle, **Offline-Alarm**,
   Standard-Leck-/Downtime-Regeln. **Tab MQTT-Broker**: eingebettet/extern,
-  Benutzer/Passwort (**Klartext-Anzeige** per 👁), secrets.yaml-Abgleich.
+  Benutzer/Passwort (**Klartext-Anzeige** per 👁), **Firmware-Secrets** (Broker-Adresse
+  für die Geräte, OTA-Passwort, API-Key → `firmware/secrets.yaml`).
   **Tab Login & System**: Dashboard-Login, tägliches **Backup**,
   **Backend-Neustart** per Klick.
 
@@ -75,6 +76,15 @@ eine Warnung. Änderungen greifen nach Backend-Neustart (Button in ⚙); danach 
 **bereits geflashte** Geräte einmal Build + OTA, damit sie die neuen Zugangsdaten
 einkompiliert bekommen. MQTT läuft ohne TLS: Schutz gegen versehentliche/neugierige
 LAN-Clients, nicht gegen Mitschneiden — gleiches gilt für das Dashboard-Login (HTTP).
+
+**Firmware-Secrets:** `firmware/secrets.yaml` (gitignored) wird vom Backend verwaltet:
+beim Start angelegt bzw. vervollständigt (Broker = LAN-IP des Servers, OTA-Passwort und
+API-Key zufällig erzeugt, MQTT-Zugangsdaten aus `config.json`), in ⚙ → MQTT-Broker →
+Firmware-Secrets editierbar und vor jedem Build geprüft — fehlt etwas, blockiert der
+Dialog „＋ Gerät“ mit Klartext-Hinweis statt eines esphome-Fehlers. Ein frischer Klon
+kann damit sofort Firmware bauen. Läuft das Dashboard auf einem Server ohne Web-Serial,
+lässt sich das gebaute `factory.bin` im Dialog herunterladen und am PC flashen:
+`python -m esptool --chip esp32 write_flash 0x0 gas-flowmeter.factory.bin`.
 
 > Bekannte amqtt-Eigenheit (getestet mit 0.11.3): retained Messages werden bei
 > jedem Subscribe an **alle** neuen Subscriptions ausgeliefert, auch wenn das
@@ -112,8 +122,9 @@ ohne verbundene Geräte bleiben Trend und Live-Werte leer.
 ## Echtbetrieb
 
 1. **Broker wählen** (⚙): eingebettet lassen (Standard) **oder** externen Broker
-   eintragen. Die Geräte tragen in `firmware/secrets.yaml` als `mqtt_broker` die
-   **LAN-IP des Dashboard-PCs** ein (nicht `127.0.0.1`; ⚙ zeigt die LAN-IP an).
+   eintragen. Die Broker-Adresse für die Geräte (`mqtt_broker` in `firmware/secrets.yaml`)
+   setzt das Backend beim Start auf die **LAN-IP des Dashboard-PCs**; prüfen/ändern in
+   ⚙ → MQTT-Broker → Firmware-Secrets (nicht `127.0.0.1`).
 2. **MQTT-Benutzer/Passwort** in ⚙ setzen (wird nach `secrets.yaml` gespiegelt),
    **Login-Passwort** für das Dashboard setzen, Preise/Schwellen prüfen.
 3. `python app.py` starten (dauerhaft z. B. via NSSM / Taskplaner). Der
@@ -165,13 +176,13 @@ verlangen den Login-Token (`X-Auth`-Header; ESP-Web-Tools-Downloads alternativ
 | `GET /api/sensors` | Registry inkl. Live-Status, Overrides, Defaults (Sensor-Manager) |
 | `POST /api/sensors/{id}` | Sensor ändern (`{name, note, gas, dept, leak, downtime}`; `null` = Standard) |
 | `POST /api/sensors/{id}/reset` · `/ota` | Zähler-Reset-Kommando · OTA-Update (IP aus meta) |
-| `GET /api/firmware` · `POST /api/firmware/build` | Build-/Job-Status · Firmware bauen |
+| `GET /api/firmware` · `POST /api/firmware/build` | Build-/Job-Status (inkl. `secrets_problems`, `esphome`) · Firmware bauen (400 mit Klartext, wenn `secrets.yaml` unvollständig) |
 | `GET /api/firmware/manifest.json` · `…/factory.bin` | ESP-Web-Tools-Manifest + Factory-Image (Token nötig — Image enthält Secrets) |
 | `DELETE /api/sensors/{id}` | Registry-Eintrag löschen |
 | `POST /api/departments` · `DELETE /api/departments/{id}` | Abteilung anlegen/umbenennen/löschen |
 | `POST /api/alarms/{id}/ack` | Alarm quittieren (gesehen, bleibt gelistet) |
 | `POST /api/alarms/{id}/resolve` | Alarm auflösen (erledigt → Historie, Re-Arm-Regeln starten) |
-| `GET /api/config` · `POST /api/config` | Einstellungen lesen/schreiben (`config.json`; MQTT-Passwort im Klartext → Admin-only) |
+| `GET /api/config` · `POST /api/config` | Einstellungen lesen/schreiben (`config.json`; MQTT-Passwort im Klartext → Admin-only). `secrets` = Firmware-Secrets (`mqtt_broker`, `ota_password`, `api_encryption_key` → `firmware/secrets.yaml`) |
 | `POST /api/restart` | Backend neu starten |
 | `GET /` | Dashboard (statisch) |
 

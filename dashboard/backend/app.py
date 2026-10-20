@@ -23,8 +23,10 @@ Start:
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
+import importlib.util
 import ipaddress
 import json
 import os
@@ -596,13 +598,26 @@ FW_BUILD_DIR = FIRMWARE_DIR / ".esphome" / "build" / "gas-flow" / ".pioenvs" / "
 FW_FACTORY_BIN = FW_BUILD_DIR / "firmware.factory.bin"
 FW_OTA_BIN = FW_BUILD_DIR / "firmware.ota.bin"
 SECRETS_FILE = FIRMWARE_DIR / "secrets.yaml"
+SECRETS_EXAMPLE = FIRMWARE_DIR / "secrets.yaml.example"
+# Alle Schluessel, die gas-flowmeter.yaml per !secret einbindet.
+SECRET_KEYS = ("mqtt_broker", "mqtt_user", "mqtt_password", "ota_password", "api_encryption_key")
+_PLACEHOLDER_RE = re.compile(r"CHANGE_ME|REPLACE_WITH", re.I)
+_LOCAL_HOSTS = {"127.0.0.1", "localhost", "0.0.0.0", "::1"}
 
 
-# --------------------------------------------- firmware/secrets.yaml-Abgleich
-# Die MQTT-Zugangsdaten werden zur BUILD-ZEIT in die Firmware einkompiliert
-# (!secret in gas-flowmeter.yaml). Damit Dashboard-Konfiguration und Firmware
-# nicht auseinanderlaufen, spiegelt das Backend Benutzer/Passwort beim
-# Speichern nach secrets.yaml und meldet Abweichungen an das Frontend.
+# --------------------------------------------- firmware/secrets.yaml-Verwaltung
+# Alle Werte, die gas-flowmeter.yaml per !secret einbindet, werden zur BUILD-ZEIT
+# in die Firmware einkompiliert. Die Datei ist gitignored — damit ein frisch
+# geklonter Server ohne Handarbeit bauen kann, verwaltet das Backend sie selbst:
+#   - beim Start angelegt (ensure_secrets): Broker = LAN-IP dieses Rechners,
+#     OTA-Passwort und API-Key werden zufaellig erzeugt
+#   - mqtt_user/mqtt_password werden immer aus config.json gespiegelt
+#     (config.json ist die Quelle der Wahrheit fuer den Broker)
+#   - Broker-Adresse, OTA-Passwort und API-Key sind in der Administration
+#     (MQTT-Broker -> Firmware-Secrets) einsehbar und aenderbar
+#   - vor jedem Build wird die Datei auf Vollstaendigkeit geprueft
+#     (secrets_problems) und ein klarer Fehler statt eines esphome-Stacktraces
+#     zurueckgegeben.
 def _secret_value(rest: str) -> str:
     rest = rest.strip()
     m = re.match(r'^"((?:[^"\\]|\\.)*)"', rest)
@@ -625,45 +640,196 @@ def read_secrets() -> dict[str, str]:
     return out
 
 
-def sync_secrets(username: str, password: str) -> bool:
-    """mqtt_user/mqtt_password in firmware/secrets.yaml nachziehen (Kommentare bleiben)."""
-    if not SECRETS_FILE.exists():
+def _q(v: str) -> str:
+    return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def write_secrets(updates: dict[str, str]) -> bool:
+    """Schluessel in firmware/secrets.yaml setzen/ergaenzen (Kommentare bleiben).
+
+    Fehlt die Datei, entsteht sie aus secrets.yaml.example (sonst leer).
+    """
+    if not FIRMWARE_DIR.exists():
+        print(f"[secrets] Firmware-Ordner fehlt: {FIRMWARE_DIR}")
         return False
-
-    def q(v: str) -> str:
-        return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
-
     try:
-        lines = SECRETS_FILE.read_text(encoding="utf-8").splitlines()
-        for key, val in (("mqtt_user", username), ("mqtt_password", password)):
+        if SECRETS_FILE.exists():
+            lines = SECRETS_FILE.read_text(encoding="utf-8").splitlines()
+        else:
+            lines = (SECRETS_EXAMPLE.read_text(encoding="utf-8").splitlines()
+                     if SECRETS_EXAMPLE.exists() else [])
+            lines.insert(0, f"# Vom Dashboard angelegt am {datetime.now():%d.%m.%Y %H:%M} — "
+                            "Werte: Administration -> MQTT-Broker -> Firmware-Secrets.")
+        for key, val in updates.items():
             for i, line in enumerate(lines):
                 if re.match(rf"^{key}\s*:", line):
-                    lines[i] = f"{key}: {q(val)}"
+                    lines[i] = f"{key}: {_q(val)}"
                     break
             else:
-                lines.append(f"{key}: {q(val)}")
+                lines.append(f"{key}: {_q(val)}")
         SECRETS_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return True
     except OSError as exc:
-        print(f"[secrets] Abgleich fehlgeschlagen: {exc}")
+        print(f"[secrets] Schreiben fehlgeschlagen: {exc}")
         return False
+
+
+def sync_secrets(username: str, password: str) -> bool:
+    """mqtt_user/mqtt_password in firmware/secrets.yaml nachziehen."""
+    return write_secrets({"mqtt_user": username, "mqtt_password": password})
+
+
+def _api_key_ok(val: str) -> bool:
+    """ESPHome verlangt fuer api.encryption.key genau 32 Byte als Base64."""
+    try:
+        return len(base64.b64decode(val, validate=True)) == 32
+    except ValueError:
+        return False
+
+
+def _device_broker_default() -> str:
+    """Broker-Adresse, die neue Geraete bekommen sollen."""
+    mq = CONFIG.get("mqtt", {})
+    if not mq.get("embedded", True):
+        ext = str(mq.get("broker", "")).strip()
+        if ext and ext not in _LOCAL_HOSTS:
+            return ext
+    return lan_ip() or ""
+
+
+def ensure_secrets() -> dict[str, str]:
+    """secrets.yaml anlegen bzw. vervollstaendigen; gibt den aktuellen Inhalt zurueck.
+
+    Aufruf beim Backend-Start, vor jedem Build und nach dem Speichern in der
+    Administration. Vorhandene, plausible Werte bleiben unangetastet — nur
+    fehlende/leere Werte und Vorlagen-Platzhalter werden ersetzt.
+    """
+    if not FIRMWARE_YAML.exists():
+        return read_secrets()
+    sec = read_secrets()
+    created = not SECRETS_FILE.exists()
+    mq = CONFIG.get("mqtt", {})
+    upd: dict[str, str] = {
+        "mqtt_user": str(mq.get("username", "")),
+        "mqtt_password": str(mq.get("password", "")),
+    }
+    broker = sec.get("mqtt_broker", "")
+    if created or not broker or _PLACEHOLDER_RE.search(broker):
+        upd["mqtt_broker"] = _device_broker_default()
+    ota = sec.get("ota_password", "")
+    if not ota or _PLACEHOLDER_RE.search(ota):
+        upd["ota_password"] = pysecrets.token_hex(12)
+    key = sec.get("api_encryption_key", "")
+    if not key or _PLACEHOLDER_RE.search(key) or not _api_key_ok(key):
+        upd["api_encryption_key"] = base64.b64encode(os.urandom(32)).decode()
+    upd = {k: v for k, v in upd.items() if sec.get(k) != v}
+    if upd:
+        what = ", ".join(upd)
+        if write_secrets(upd):
+            print(f"[secrets] {SECRETS_FILE.name} {'angelegt' if created else 'ergänzt'} ({what})")
+        sec = read_secrets()
+    return sec
+
+
+def secrets_problems() -> list[str]:
+    """Gruende, warum ein Firmware-Build (noch) nicht moeglich ist (leer = ok)."""
+    if not FIRMWARE_YAML.exists():
+        return [f"{FIRMWARE_YAML.name} fehlt (Firmware-Ordner nicht ausgecheckt?)"]
+    if not SECRETS_FILE.exists():
+        return ["firmware/secrets.yaml fehlt — wird beim Backend-Start angelegt "
+                "(Schreibrechte im Ordner firmware/ prüfen)"]
+    sec = read_secrets()
+    out: list[str] = []
+    for key in SECRET_KEYS:
+        if key not in sec:
+            out.append(f"{key} fehlt")
+    for key in ("mqtt_broker", "ota_password", "api_encryption_key"):
+        val = sec.get(key)
+        if val is None:
+            continue
+        if not val:
+            out.append(f"{key} ist leer")
+        elif _PLACEHOLDER_RE.search(val):
+            out.append(f"{key} ist noch der Platzhalter aus der Vorlage")
+    broker = sec.get("mqtt_broker", "")
+    if broker and broker.split(":")[0].lower() in _LOCAL_HOSTS:
+        out.append("mqtt_broker darf nicht localhost sein — die Geräte brauchen die "
+                   "LAN-IP dieses Servers")
+    key = sec.get("api_encryption_key", "")
+    if key and not _PLACEHOLDER_RE.search(key) and not _api_key_ok(key):
+        out.append("api_encryption_key ungültig (32 Byte, Base64)")
+    return out
+
+
+def secrets_warnings() -> list[str]:
+    """Hinweise, die den Build nicht blockieren, aber im Betrieb auffallen wuerden."""
+    sec = read_secrets()
+    mq = CONFIG.get("mqtt", {})
+    out: list[str] = []
+    if _PLACEHOLDER_RE.search(str(mq.get("password", ""))):
+        out.append("MQTT-Passwort ist noch der Vorlagenwert aus config.json.example — "
+                   "vor dem Produktivbetrieb ändern")
+    broker = sec.get("mqtt_broker", "")
+    if broker:
+        if mq.get("embedded", True):
+            ip = lan_ip()
+            if ip and broker != ip:
+                out.append(f"mqtt_broker ({broker}) ≠ LAN-IP dieses Servers ({ip}) — "
+                           "die Geräte verbinden sich mit dem eingebetteten Broker hier")
+        else:
+            ext = str(mq.get("broker", "")).strip()
+            if ext and broker != ext:
+                out.append(f"mqtt_broker ({broker}) ≠ externer Broker ({ext})")
+    return out
+
+
+_esphome_cache: dict = {"ok": None, "ts": 0.0}
+
+
+def esphome_available() -> bool:
+    """Ist das esphome-Python-Paket im Interpreter des Backends installiert?"""
+    if time.time() - _esphome_cache["ts"] < 60 and _esphome_cache["ok"] is not None:
+        return _esphome_cache["ok"]
+    try:
+        ok = importlib.util.find_spec("esphome") is not None
+    except (ImportError, ValueError):
+        ok = False
+    _esphome_cache.update(ok=ok, ts=time.time())
+    return ok
 
 
 _lan_ip_cache: dict = {"ip": None, "ts": 0.0}
 
 
 def lan_ip() -> str | None:
-    """LAN-IP dieses PCs (= Broker-Adresse fuer die Geraete bei eingebettetem Broker)."""
+    """LAN-IP dieses PCs (= Broker-Adresse fuer die Geraete bei eingebettetem Broker).
+
+    UDP-connect sendet kein Paket, liefert aber die Quell-IP der gewaehlten Route.
+    Probiert werden das Internet (Default-Route) und private Netze, damit auch
+    eine VM ohne Internetzugang ihre LAN-Adresse findet.
+    """
     if time.time() - _lan_ip_cache["ts"] < 60 and _lan_ip_cache["ip"]:
         return _lan_ip_cache["ip"]
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.settimeout(1)
-        s.connect(("8.8.8.8", 80))       # kein Traffic — nur Routing-Lookup
-        ip = s.getsockname()[0]
-        s.close()
-    except OSError:
-        ip = None
+    ip = None
+    for probe in ("8.8.8.8", "10.1.1.1", "192.168.1.1", "172.16.1.1"):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.settimeout(1)
+            s.connect((probe, 80))
+            cand = s.getsockname()[0]
+            s.close()
+        except OSError:
+            continue
+        if cand and not cand.startswith("127."):
+            ip = cand
+            break
+    if not ip:
+        try:
+            cands = sorted({ai[4][0] for ai in
+                            socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)})
+            ip = next((c for c in cands if not c.startswith("127.")), None)
+        except OSError:
+            ip = None
     _lan_ip_cache.update(ip=ip, ts=time.time())
     return ip
 
@@ -719,6 +885,8 @@ def fw_info() -> dict:
         return {"size": st.st_size, "mtime": int(st.st_mtime)}
     return {
         "yaml_exists": FIRMWARE_YAML.exists(),
+        "esphome": esphome_available(),
+        "secrets_problems": secrets_problems(),
         "factory": _bin(FW_FACTORY_BIN),
         "ota": _bin(FW_OTA_BIN),
         "job": {
@@ -1104,6 +1272,17 @@ def api_firmware_build(req: Request):
         return deny()
     if not FIRMWARE_YAML.exists():
         return JSONResponse({"ok": False, "error": f"{FIRMWARE_YAML} fehlt"}, status_code=500)
+    if not esphome_available():
+        return JSONResponse({"ok": False, "error": "esphome ist auf dem Dashboard-Server nicht "
+                             "installiert — im Backend-Python: pip install esphome"},
+                            status_code=500)
+    ensure_secrets()                 # fehlende Werte erzeugen, MQTT-Zugangsdaten spiegeln
+    problems = secrets_problems()
+    if problems:
+        return JSONResponse({"ok": False, "problems": problems,
+                             "error": "firmware/secrets.yaml unvollständig: " + "; ".join(problems)
+                             + " → Administration → MQTT-Broker → Firmware-Secrets"},
+                            status_code=400)
     if not start_fw_job("build", ["compile", FIRMWARE_YAML.name], None, timeout=900):
         return JSONResponse({"ok": False, "error": "es läuft bereits ein Job"}, status_code=409)
     return {"ok": True}
@@ -1318,7 +1497,11 @@ def api_get_config(req: Request):
             "user_match": sec.get("mqtt_user", "") == m.get("username", ""),
             "password_match": sec.get("mqtt_password", "") == m.get("password", ""),
             "broker": sec.get("mqtt_broker", ""),
+            "ota_password": sec.get("ota_password", ""),
+            "api_encryption_key": sec.get("api_encryption_key", ""),
             "lan_ip": lan_ip(),
+            "problems": secrets_problems(),
+            "warnings": secrets_warnings(),
         },
         "status": {
             "embedded_running": _broker_state.get("running", False),
@@ -1334,7 +1517,8 @@ async def api_set_config(req: Request):
 
     Preise/Defaults greifen sofort; Broker-Felder erst nach Neustart -> restart_required.
     MQTT-Zugangsdaten werden zusätzlich nach firmware/secrets.yaml gespiegelt,
-    damit der nächste Firmware-Build automatisch passt.
+    damit der nächste Firmware-Build automatisch passt. Unter "secrets" können
+    Broker-Adresse, OTA-Passwort und API-Key der Geräte gesetzt werden.
     """
     if not is_admin(req):
         return deny()
@@ -1346,7 +1530,17 @@ async def api_set_config(req: Request):
     restart = False
     creds_changed = False
     fresh_token = None
+    secrets_upd: dict[str, str] = {}
     try:
+        if isinstance(body.get("secrets"), dict):
+            bs = body["secrets"]
+            for key in ("mqtt_broker", "ota_password", "api_encryption_key"):
+                if key in bs:
+                    secrets_upd[key] = str(bs[key]).strip()
+            k = secrets_upd.get("api_encryption_key")
+            if k and not _api_key_ok(k):
+                return JSONResponse({"ok": False, "error": "api_encryption_key: 32 Byte Base64 "
+                                     "erwartet (Button „Neu erzeugen“)"}, status_code=400)
         if "stale_seconds" in body:
             CONFIG["stale_seconds"] = int(body["stale_seconds"])
         if "offline_alarm_minutes" in body:
@@ -1404,10 +1598,15 @@ async def api_set_config(req: Request):
 
     save_config()
     secrets_synced = None
-    if creds_changed:
-        mq = CONFIG.get("mqtt", {})
-        secrets_synced = sync_secrets(mq.get("username", ""), mq.get("password", ""))
-    out = {"ok": True, "restart_required": restart, "secrets_synced": secrets_synced}
+    secrets_saved = None
+    if secrets_upd:
+        secrets_saved = write_secrets(secrets_upd)
+    if creds_changed or secrets_upd:
+        # Zugangsdaten spiegeln, leere/ungültige Werte auffüllen
+        ensure_secrets()
+        secrets_synced = creds_changed and bool(SECRETS_FILE.exists())
+    out = {"ok": True, "restart_required": restart, "secrets_synced": secrets_synced,
+           "secrets_saved": secrets_saved}
     if fresh_token is not None:
         out["token"] = fresh_token         # Setzer bleibt eingeloggt
     return out
@@ -1596,6 +1795,7 @@ app.mount("/", StaticFiles(directory=str(FRONTEND), html=True), name="frontend")
 if __name__ == "__main__":
     load_sensors()
     _ensure_auth_secret()
+    ensure_secrets()                 # firmware/secrets.yaml anlegen/vervollständigen
     _migrate_legacy_db()
     init_db()
     start_mqtt()

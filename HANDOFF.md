@@ -25,6 +25,7 @@ Es gibt **eine Einheits-Firmware für alle Geräte** (`firmware/gas-flowmeter.ya
   | `anlage-01` | Hostname `gas-flow-e4f248`, MAC `10:97:BD:E4:F2:48` | 192.168.178.38 | Argon |
   | `gas-e998c8` | — | 192.168.178.99 | Argon / BP |
 - **Die aktuelle Instanz läuft auf Lovis' PC (192.168.178.37, Ports 8000 + 1883) und ist nur Test/Staging.** Kein Autostart (bewusst) — nach einem Reboot des PCs ist sie down, bis jemand sie manuell startet. Die echte Produktion soll auf die VM (deine Aufgabe 2).
+- **Update 20.10.2026:** Die Produktivinstanz läuft jetzt auf **`http://10.157.124.20:8000/`**. `firmware/secrets.yaml` muss **nicht mehr von Hand übergeben** werden: Das Backend legt die Datei beim Start selbst an (Broker = LAN-IP des Servers, OTA-Passwort und API-Key werden erzeugt, MQTT-Zugangsdaten aus `config.json`) und sie ist unter **Administration → MQTT-Broker → Firmware-Secrets** einsehbar/änderbar. Zum Aktivieren reicht `git pull` + Backend-Neustart (Details unter „Zugangsdaten & Secrets“).
 - Festo-Sensor an `anlage-01` ist real eingestellt: **SP = 1 Nl**, **PULS = 75 ms** (das PULS-Menü hat nur diskrete Stufen; 75 ms passt zum 30-ms-Firmware-Filter).
 
 ---
@@ -58,14 +59,14 @@ python app.py        # Web :8000 + MQTT-Broker :1883; config.json entsteht beim 
 **Autostart als Dienst einrichten (systemd) — das ist der wichtigste offene Betriebspunkt.** Auf dem Test-PC gab es keinen Autostart; die Instanz war nach jedem Reboot down. Unter einem Supervisor `GAS_SUPERVISED=1` setzen — dann beendet sich der Prozess beim ⚙-Neustart-Button nur und der Dienst startet ihn neu.
 
 **Migration vom Test-PC (Reihenfolge ist verifiziert):**
-1. Vom Test-PC übernehmen (liegen **nicht** im Repo): `dashboard/backend/gas.db` (Messhistorie!), `dashboard/backend/config.json`, `dashboard/backend/sensors.json`, `firmware/secrets.yaml` → Übergabe durch Lovis.
-2. In `firmware/secrets.yaml` den `mqtt_broker` auf die **VM-IP** stellen.
+1. Vom Test-PC übernehmen (liegen **nicht** im Repo): `dashboard/backend/gas.db` (Messhistorie!), `dashboard/backend/config.json`, `dashboard/backend/sensors.json` → Übergabe durch Lovis. (`firmware/secrets.yaml` entsteht auf der VM automatisch, siehe „Zugangsdaten & Secrets“.)
+2. Administration → MQTT-Broker → **Firmware-Secrets**: Broker-Adresse auf die **VM-IP** stellen (Button „Übernehmen“) und das **OTA-Passwort der laufenden Geräte** eintragen (bekommst du von Lovis) → Speichern.
 3. Im Dashboard „＋ Gerät“ → **Firmware bauen** (~30–60 s) — **vor** dem Umzug bauen, dann bleiben die Geräte solange online.
 4. Backend auf der VM starten, danach **pro Gerät OTA** über den Sensor-Manager (6–12 s pro Gerät, nutzt die IP aus dem meta-Topic).
 5. Prüfen: beide Geräte „online“, Zählerstände unverändert (OTA fasst den NVS-Zähler nicht an).
 
 **Wichtige Einschränkungen:**
-- Der **USB-Erstflash im Browser** (ESP Web Tools) funktioniert nur in **Chrome/Edge auf `http://localhost:8000`** (Web-Serial). Von der VM aus geht das nicht — neue Geräte flashst du entweder mit einem lokal laufenden Dashboard auf deinem PC oder per CLI: `esphome run gas-flowmeter.yaml` (aus `firmware/`, braucht die `secrets.yaml`).
+- Der **USB-Erstflash im Browser** (ESP Web Tools) funktioniert nur in **Chrome/Edge auf `http://localhost:8000`** (Web-Serial). Von der VM aus geht das nicht — neue Geräte flashst du am einfachsten mit dem **Factory-Image vom Server**: im Dialog „＋ Gerät“ auf der VM bauen, `factory.bin` herunterladen und am PC per USB flashen (`python -m esptool --chip esp32 write_flash 0x0 gas-flowmeter.factory.bin`; esptool ist in `pip install esphome` enthalten). Alternativ per CLI aus `firmware/`: `esphome run gas-flowmeter.yaml` — dann muss die lokale `secrets.yaml` dieselben Werte haben wie auf dem Server (Administration → Firmware-Secrets).
 - **Kein TLS** (MQTT und Dashboard-HTTP): Schutz gegen versehentliche LAN-Clients, nicht gegen Mitschneiden. Mit der IT klären: eigenes Netz-Segment und/oder Reverse-Proxy mit HTTPS vor Port 8000.
 - Tägliche **Backups** landen in `dashboard/backend/backups/JJJJ-MM-TT/` (Rotation 30 Tage) — auf der VM verifizieren und idealerweise zusätzlich extern wegsichern (VM-Snapshot o. ä.).
 
@@ -125,15 +126,16 @@ Bekannte offene Punkte (Kandidaten für die ersten Issues):
 
 ## Zugangsdaten & Secrets (nicht im Repo!)
 
-Zwei Dateien sind **gitignored** und existieren nur auf dem Test-PC — die bekommst du **persönlich von Lovis**:
+Zwei Dateien sind **gitignored** (Passwörter!) und liegen nur auf dem jeweiligen Server:
 
-| Datei | Inhalt |
-|---|---|
-| `dashboard/backend/config.json` | MQTT-Benutzer/Passwort, Dashboard-Login-Passwort, Preise/Schwellen |
-| `firmware/secrets.yaml` | Broker-IP, MQTT-Zugangsdaten (werden vom Dashboard automatisch synchron gehalten), **OTA-Passwort**, API-Key |
+| Datei | Inhalt | Woher |
+|---|---|---|
+| `dashboard/backend/config.json` | MQTT-Benutzer/Passwort, Dashboard-Login-Passwort, Preise/Schwellen | entsteht beim Erststart aus `config.json.example`; Werte in der Administration setzen (oder Kopie vom Test-PC durch Lovis) |
+| `firmware/secrets.yaml` | Broker-Adresse, MQTT-Zugangsdaten, **OTA-Passwort**, API-Key — wird in die Firmware **einkompiliert** | **legt das Backend beim Start selbst an** (Broker = LAN-IP, OTA-Passwort/API-Key zufällig, MQTT-Daten aus `config.json`); pflegen unter Administration → MQTT-Broker → **Firmware-Secrets** |
 
-- Das MQTT-Passwort ist im Dashboard unter Administration → MQTT-Broker per 👁 im Klartext einsehbar (nach Login).
-- Das **OTA-Passwort** ist einkompiliert; eine Änderung erfordert USB-Reflash aller Geräte — also nicht anfassen.
+- MQTT-Passwort und OTA-Passwort sind im Dashboard unter Administration → MQTT-Broker per 👁 im Klartext einsehbar (nach Login).
+- **OTA-Passwort:** Ein OTA-Update verlangt das Passwort, das im Gerät einkompiliert ist. Für die **zwei bereits laufenden Geräte** musst du deshalb das bisherige OTA-Passwort (von Lovis) in den Firmware-Secrets eintragen, bevor du sie per OTA aktualisierst — sonst bleibt nur der USB-Neuflash. Für alle neuen Geräte ist der automatisch erzeugte Wert in Ordnung; danach nicht mehr ändern (Änderung = USB-Reflash aller Geräte).
+- Vor jedem Build prüft das Backend die Datei; fehlt etwas, zeigt der Dialog „＋ Gerät“ im Klartext an, was zu tun ist (statt eines esphome-Fehlers im Log).
 - **Empfehlung:** Nach dem VM-Umzug MQTT- und Login-Passwort rotieren. Das verifizierte Rezept: Administration → Zugangsdaten ändern (Sync nach `secrets.yaml` automatisch) → Firmware bauen (**vor** dem Neustart!) → Backend-Neustart (Broker-Cutover) → pro Gerät OTA.
 - Keine Passwörter in Repo, Issues oder Chat-Nachrichten schreiben.
 

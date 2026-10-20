@@ -130,8 +130,16 @@
     authHint:'Benutzer + Passwort gesetzt = Geräte müssen sich anmelden · leer = offen.',
     secretsOk:'✓ firmware/secrets.yaml stimmt überein — Builds erhalten diese Zugangsdaten.',
     secretsDiff:'⚠ firmware/secrets.yaml weicht ab — wird beim Speichern automatisch angeglichen.',
-    secretsMissing:'⚠ firmware/secrets.yaml fehlt — vor dem ersten Firmware-Build anlegen (Vorlage: secrets.yaml.example).',
+    secretsMissing:'⚠ firmware/secrets.yaml fehlt — das Backend legt sie beim Start automatisch an (Schreibrechte im Ordner firmware/ prüfen, dann Backend neu starten).',
     secretsBroker:'Broker-IP in den Geräten (secrets.yaml): {0} · LAN-IP dieses PCs: {1}',
+    fwSecrets:'Firmware-Secrets (werden beim Build in alle Geräte einkompiliert)',
+    secBroker:'Broker-Adresse für die Geräte (LAN-IP/Hostname dieses Servers)', secUseAddr:'Übernehmen: {0}',
+    secOta:'OTA-Passwort', secKey:'API-Verschlüsselungsschlüssel (32 Byte, Base64)', secGen:'Neu erzeugen',
+    secAuto:'firmware/secrets.yaml wird vom Backend verwaltet: beim Start angelegt, fehlende Werte werden erzeugt, MQTT-Benutzer/Passwort kommen aus der Broker-Konfiguration oben.',
+    secOtaHint:'OTA-Updates verlangen das im Gerät einkompilierte OTA-Passwort: für bereits laufende Geräte das bisherige Passwort eintragen — sonst bleibt nur der USB-Neuflash. Für neue Geräte ist jeder Wert ok.',
+    secRebuild:'Nach Änderungen: Firmware neu bauen („＋ Gerät“ → Firmware bauen) und laufende Geräte per OTA aktualisieren.',
+    secReady:'✓ secrets.yaml vollständig — Firmware-Build möglich.', secBlocked:'⚠ Firmware-Build nicht möglich: {0}',
+    secSaveFail:'firmware/secrets.yaml konnte nicht geschrieben werden (Schreibrechte im Ordner firmware/?)',
     showPw:'Passwort anzeigen', hidePw:'Passwort verbergen',
     prices:'Preise & Allgemein', priceOf:'{0} · €/m³', staleAfter:'Offline nach (s ohne Daten)', offlineAlarm:'Offline-Alarm nach (min · 0 = aus)',
     backupOn:'Tägliches Backup (DB + Konfiguration)', backupKeep:'aufbewahren (Tage)',
@@ -159,6 +167,10 @@
     fwFrom:'Build vom <b style="color:var(--text)">{0}</b> · {1} KB', fwNone:'<b style="color:var(--warn)">noch kein Build vorhanden</b> — erst „Firmware bauen“ klicken',
     fwRunning:'⏳ {0} läuft …', fwOkJob:'✓ letzter Job ({0}) erfolgreich', fwFailJob:'✗ letzter Job ({0}) fehlgeschlagen',
     fwNoApi:'Firmware-Status nicht ladbar — läuft das Backend auf dem Dashboard-PC?',
+    fwBlocked:'⚠ Build nicht möglich: {0} — Administration → MQTT-Broker → Firmware-Secrets',
+    fwNoEsphome:'✗ esphome ist auf dem Dashboard-Server nicht installiert (im Backend-Python: pip install esphome).',
+    fwDownload:'factory.bin herunterladen',
+    fwDlHint:'Ohne Web-Serial (z. B. Dashboard auf einem Server): Image herunterladen und am PC per USB flashen — <span class="mono">python -m esptool --chip esp32 write_flash 0x0 gas-flowmeter.factory.bin</span> (esptool ist in esphome enthalten).',
     flashBox:'Erstflash per USB', flashBtn:'Firmware flashen (USB)', flashModFail:'Flash-Modul (vendor/esp-web-tools) nicht ladbar.', flashModLoad:'Flash-Modul lädt …',
     flashOtaHint:'Updates verbundener Geräte: Sensor auswählen → „Firmware-Update (OTA)“.',
     macBox:'MAC-Adresse auslesen (für die IT-Freischaltung)', macBtn:'MAC-Adresse auslesen (USB)', macActive:'Konsole aktiv …', macStop:'Stopp',
@@ -284,8 +296,16 @@
     authHint:'User + password set = devices must log in · empty = open.',
     secretsOk:'✓ firmware/secrets.yaml matches — builds get these credentials.',
     secretsDiff:'⚠ firmware/secrets.yaml differs — it will be updated automatically on save.',
-    secretsMissing:'⚠ firmware/secrets.yaml missing — create it before the first firmware build (template: secrets.yaml.example).',
+    secretsMissing:'⚠ firmware/secrets.yaml missing — the backend creates it automatically on start (check write permissions in firmware/, then restart the backend).',
     secretsBroker:'Broker IP inside the devices (secrets.yaml): {0} · LAN IP of this PC: {1}',
+    fwSecrets:'Firmware secrets (compiled into every device on build)',
+    secBroker:'Broker address for the devices (LAN IP/hostname of this server)', secUseAddr:'Use: {0}',
+    secOta:'OTA password', secKey:'API encryption key (32 bytes, Base64)', secGen:'Generate new',
+    secAuto:'firmware/secrets.yaml is managed by the backend: created on start, missing values are generated, MQTT user/password come from the broker configuration above.',
+    secOtaHint:'OTA updates require the OTA password compiled into the device: for devices already running, enter their existing password — otherwise only a USB reflash works. Any value is fine for new devices.',
+    secRebuild:'After changes: rebuild the firmware (“＋ Device” → Build firmware) and update running devices via OTA.',
+    secReady:'✓ secrets.yaml complete — firmware build possible.', secBlocked:'⚠ Firmware build not possible: {0}',
+    secSaveFail:'firmware/secrets.yaml could not be written (write permissions in firmware/?)',
     showPw:'Show password', hidePw:'Hide password',
     prices:'Prices & general', priceOf:'{0} · €/m³', staleAfter:'Offline after (s without data)', offlineAlarm:'Offline alarm after (min · 0 = off)',
     backupOn:'Daily backup (DB + configuration)', backupKeep:'keep (days)',
@@ -312,6 +332,10 @@
     fwFrom:'Build from <b style="color:var(--text)">{0}</b> · {1} KB', fwNone:'<b style="color:var(--warn)">no build yet</b> — click “Build firmware” first',
     fwRunning:'⏳ {0} running …', fwOkJob:'✓ last job ({0}) succeeded', fwFailJob:'✗ last job ({0}) failed',
     fwNoApi:'Firmware status not available — is the backend running on the dashboard PC?',
+    fwBlocked:'⚠ Build not possible: {0} — Administration → MQTT broker → Firmware secrets',
+    fwNoEsphome:'✗ esphome is not installed on the dashboard server (in the backend Python: pip install esphome).',
+    fwDownload:'Download factory.bin',
+    fwDlHint:'Without Web Serial (e.g. dashboard on a server): download the image and flash it via USB on your PC — <span class="mono">python -m esptool --chip esp32 write_flash 0x0 gas-flowmeter.factory.bin</span> (esptool ships with esphome).',
     flashBox:'First flash via USB', flashBtn:'Flash firmware (USB)', flashModFail:'Flash module (vendor/esp-web-tools) failed to load.', flashModLoad:'Flash module loading …',
     flashOtaHint:'Updates for connected devices: select a sensor → “Firmware update (OTA)”.',
     macBox:'Read MAC address (for IT approval)', macBtn:'Read MAC address (USB)', macActive:'Console active …', macStop:'Stop',
@@ -1364,7 +1388,7 @@
         backup:deepCopy(cfg.backup||{enabled:true,keep_days:30}),
         gases:deepCopy(cfg.gases||{}),
         defaults:deepCopy(cfg.defaults||{leak:{min:0.2,active:1.0},downtime:{enabled:false,max_nl:0,windows:[]}}),
-        mqtt:deepCopy(cfg.mqtt||{}), adminpw:'' };
+        mqtt:deepCopy(cfg.mqtt||{}), adminpw:'', secrets:secretsEdit(cfg) };
       if(!ADM.cfgEdit.defaults.downtime) ADM.cfgEdit.defaults.downtime={enabled:false,max_nl:0,windows:[]};
       if(!ADM.cfgEdit.defaults.leak) ADM.cfgEdit.defaults.leak={min:0.2,active:1.0};
       if(ADM.sel){ const s=reg.sensors.find(x=>x.id===ADM.sel); ADM.edit=s?makeEdit(s):null; if(!s) ADM.sel=null; }
@@ -1634,6 +1658,22 @@
     dtCollect('c');
   }
 
+  // Editierbare Firmware-Secrets aus /api/config (Broker-Adresse, OTA-Passwort, API-Key)
+  function secretsEdit(cfg){
+    const s=(cfg&&cfg.secrets)||{};
+    return { mqtt_broker:s.broker||'', ota_password:s.ota_password||'', api_encryption_key:s.api_encryption_key||'' };
+  }
+  function randBytes(n){ const a=new Uint8Array(n); crypto.getRandomValues(a); return a; }
+  function randHex(n){ return Array.from(randBytes(n), b=>b.toString(16).padStart(2,'0')).join(''); }
+  function randB64(n){ return btoa(String.fromCharCode(...randBytes(n))); }
+  // Adresse, unter der die Geräte den Broker erreichen sollen: bevorzugt die, über
+  // die der Admin das Dashboard gerade aufruft (nachweislich aus dem LAN erreichbar).
+  function brokerSuggestion(sec){
+    const h=location.hostname;
+    if(h && !['localhost','127.0.0.1','::1','[::1]'].includes(h)) return h;
+    return (sec&&sec.lan_ip)||'';
+  }
+
   function admBrokerHTML(){
     const e=ADM.cfgEdit, m=e.mqtt, st=(ADM.cfg&&ADM.cfg.status)||{}, sec=(ADM.cfg&&ADM.cfg.secrets)||{};
     const chip=(ok,txtOk,txtBad)=>`<span class="pill" style="display:inline-flex;align-items:center;gap:6px;background:${ok?'var(--good-bg)':'var(--danger-bg)'};color:${ok?'var(--good)':'var(--danger)'}">● ${esc(ok?txtOk:txtBad)}</span>`;
@@ -1644,6 +1684,16 @@
         : `<span style="color:var(--warn)">${esc(t('secretsDiff'))}</span>`;
     const brokerLine = sec.exists&&sec.broker ? `<span>${esc(t('secretsBroker', sec.broker, sec.lan_ip||'?'))}</span>` : '';
     const pwType=ADM.showPw?'text':'password';
+    const sc=e.secrets||(e.secrets=secretsEdit(ADM.cfg));
+    const suggest=brokerSuggestion(sec);
+    const probs=sec.problems||[], warns=sec.warnings||[];
+    const secStatus = !sec.exists
+      ? `<span style="color:var(--warn)">${esc(t('secretsMissing'))}</span>`
+      : probs.length
+        ? `<span style="color:var(--danger);font-weight:600">${esc(t('secBlocked', probs.join(' · ')))}</span>`
+        : `<span style="color:var(--good)">${esc(t('secReady'))}</span>`;
+    const secWarns = warns.map(w=>`<span style="color:var(--warn)">⚠ ${esc(w)}</span>`).join('');
+    const eye=`<button data-action="toggle-pw" title="${esc(ADM.showPw?t('hidePw'):t('showPw'))}" class="btn" style="padding:6px 9px;flex:none">${ADM.showPw?'🙈':'👁'}</button>`;
     return `<div style="display:flex;flex-direction:column;gap:16px;max-width:760px">
       ${ADM.restartHint?`<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;background:var(--warn-bg2);border:1px solid var(--warn-border);border-radius:9px;padding:9px 12px;font-size:12px;color:var(--warn);font-weight:600">${esc(t('restartNeeded'))}
         <button data-action="cfg-restart" class="btn" style="color:var(--warn);border-color:var(--warn)">${esc(t('restartBtn'))}</button></div>`:''}
@@ -1675,6 +1725,29 @@
           ${brokerLine}
         </div>
       </div>
+      <div class="card">
+        <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:11px">
+          <span class="card-title">${esc(t('fwSecrets'))}</span>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr auto;gap:12px;align-items:end">
+          <div><span class="lbl">${esc(t('secBroker'))}</span><input id="s-broker" value="${esc(sc.mqtt_broker||'')}" class="inp mono"></div>
+          <button data-action="sec-use-addr" data-addr="${esc(suggest)}" class="btn" ${suggest&&suggest!==sc.mqtt_broker?'':'disabled'}>${esc(t('secUseAddr', suggest||'?'))}</button>
+          <div><span class="lbl">${esc(t('secOta'))}</span>
+            <div style="display:flex;gap:6px;align-items:center">
+              <input id="s-ota" type="${pwType}" value="${esc(sc.ota_password||'')}" class="inp mono">${eye}
+            </div></div>
+          <button data-action="sec-gen-ota" class="btn">${esc(t('secGen'))}</button>
+          <div><span class="lbl">${esc(t('secKey'))}</span><input id="s-key" value="${esc(sc.api_encryption_key||'')}" class="inp mono"></div>
+          <button data-action="sec-gen-key" class="btn">${esc(t('secGen'))}</button>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--mute);margin-top:9px">
+          ${secStatus}
+          ${secWarns}
+          <span>${esc(t('secAuto'))}</span>
+          <span>${esc(t('secOtaHint'))}</span>
+          <span>${esc(t('secRebuild'))}</span>
+        </div>
+      </div>
       <div style="display:flex;gap:9px;align-items:center;flex-wrap:wrap">
         <button data-action="cfg-save-broker" class="btn-primary">${esc(t('save'))}</button>
         <button data-action="cfg-restart" class="btn" ${ADM.restartWait?'disabled':''}>${esc(t('restartBtn'))}</button>
@@ -1693,6 +1766,10 @@
     if(g('b-broker')) m.broker=g('b-broker').value.trim();
     if(g('b-user')) m.username=g('b-user').value.trim();
     if(g('b-pass')) m.password=g('b-pass').value;
+    const sc=e.secrets||(e.secrets=secretsEdit(ADM.cfg));
+    if(g('s-broker')) sc.mqtt_broker=g('s-broker').value.trim();
+    if(g('s-ota')) sc.ota_password=g('s-ota').value.trim();
+    if(g('s-key')) sc.api_encryption_key=g('s-key').value.trim();
   }
 
   function admSystemHTML(){
@@ -1754,6 +1831,7 @@
     }else if(part==='broker'){
       body.mqtt={ embedded:e.mqtt.embedded, bind:e.mqtt.bind, port:e.mqtt.port,
                   broker:e.mqtt.broker, username:e.mqtt.username, password:e.mqtt.password||'' };
+      body.secrets=e.secrets||secretsEdit(ADM.cfg);
     }else if(part==='system'){
       body.backup=e.backup;
       if(e.adminpw) body.admin_password=e.adminpw;
@@ -1764,6 +1842,8 @@
       if(res && typeof res.token==='string'){ setToken(res.token); AUTH.required=!!e.adminpw; AUTH.admin=true; }
       e.adminpw='';
       try{ ADM.cfg=await api('api/config'); }catch(e2){}
+      if(part==='broker') e.secrets=secretsEdit(ADM.cfg);   // erzeugte/normalisierte Werte anzeigen
+      if(res && res.secrets_saved===false){ setAdmMsg(t('secSaveFail'), true); return; }
       setAdmMsg(t('saved')); poll();
     }catch(err){ setAdmMsg(t('err')+err.message, true); }
   }
@@ -1904,11 +1984,13 @@
       ? `<span style="color:var(--brand)">${t('fwRunning',jobName)}</span>`
       : job.ok===true ? `<span style="color:var(--good)">${esc(t('fwOkJob',job.type||''))}</span>`
       : job.ok===false ? `<span style="color:var(--danger)">${esc(t('fwFailJob',job.type||''))}</span>` : '';
+    const blocked = fw.esphome===false ? t('fwNoEsphome')
+      : (fw.secrets_problems&&fw.secrets_problems.length) ? t('fwBlocked', fw.secrets_problems.join(' · ')) : '';
     const log=(job.log&&job.log.length)?`<pre id="fw-log" style="margin:8px 0 0;background:#f7f9fc;border:1px solid var(--border);border-radius:7px;padding:8px 10px;font-size:10.5px;line-height:1.45;color:var(--dim);max-height:150px;overflow:auto;white-space:pre-wrap;font-family:var(--mono)">${job.log.map(esc).join('\n')}</pre>`:'';
     return `<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--dim)">
-        <button data-action="fw-build" class="btn" ${job.running?'disabled':''}>${esc(t('fwBuild'))}</button>
+        <button data-action="fw-build" class="btn" ${(job.running||blocked)?'disabled':''}>${esc(t('fwBuild'))}</button>
         <span>${build}</span><span class="mono" style="font-size:11.5px">${jstate}</span>
-      </div>${log}`;
+      </div>${blocked?`<div style="margin-top:8px;font-size:12px;color:var(--danger);font-weight:600">${esc(blocked)}</div>`:''}${log}`;
   }
 
   function flasherHTML(){
@@ -1919,6 +2001,9 @@
     const serialHint = serialOk() ? '' :
       `<div style="background:var(--warn-bg2);border:1px solid var(--warn-border);border-radius:8px;padding:9px 12px;font-size:12px;color:var(--warn);font-weight:600;margin-bottom:10px">${t('serialHint')}</div>`;
     const manifest='api/firmware/manifest.json'+(TOKEN?('?auth='+encodeURIComponent(TOKEN)):'');
+    const dlBtn = (M.fw&&M.fw.factory)
+      ? `<a href="api/firmware/factory.bin${TOKEN?('?auth='+encodeURIComponent(TOKEN)):''}" download="gas-flowmeter.factory.bin" class="btn" style="text-decoration:none">${esc(t('fwDownload'))}</a>`
+      : '';
     const flashBtn = !serialOk() ? '' :
       EWT_STATE==='ready'
         ? `<esp-web-install-button manifest="${esc(manifest)}"><button slot="activate" class="btn-primary">${esc(t('flashBtn'))}</button></esp-web-install-button>`
@@ -1944,8 +2029,9 @@
       </div>
       <div style="${box}">
         <span style="font-size:13px;font-weight:700;display:block;margin-bottom:10px">${esc(t('flashBox'))}</span>
-        <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">${flashBtn}
+        <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">${flashBtn}${dlBtn}
           <span style="font-size:11.5px;color:var(--mute)">${esc(t('flashOtaHint'))}</span></div>
+        ${serialOk()?'':`<div style="font-size:11.5px;color:var(--mute);margin-top:8px">${t('fwDlHint')}</div>`}
       </div>
       <div style="${box}">
         <span style="font-size:13px;font-weight:700;display:block;margin-bottom:10px">${esc(t('macBox'))}</span>
@@ -2260,6 +2346,10 @@
     else if(act==='cfg-save-broker'){ await saveCfg('broker'); return; }
     else if(act==='cfg-save-system'){ await saveCfg('system'); return; }
     else if(act==='toggle-pw'){ collectAdminForms(); ADM.showPw=!ADM.showPw; render(); return; }
+    else if(act==='sec-use-addr'){ collectAdminForms(); const v=el.getAttribute('data-addr')||'';
+      if(v&&ADM.cfgEdit) ADM.cfgEdit.secrets.mqtt_broker=v; render(); return; }
+    else if(act==='sec-gen-ota'){ collectAdminForms(); if(ADM.cfgEdit) ADM.cfgEdit.secrets.ota_password=randHex(12); render(); return; }
+    else if(act==='sec-gen-key'){ collectAdminForms(); if(ADM.cfgEdit) ADM.cfgEdit.secrets.api_encryption_key=randB64(32); render(); return; }
     else if(act==='login-disable'){ collectAdminForms();
       if(!confirm(t('loginDisableConfirm'))) return;
       try{ await api('api/config',{method:'POST',body:JSON.stringify({admin_password:''})});

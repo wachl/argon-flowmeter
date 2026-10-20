@@ -23,7 +23,7 @@ Stromausfall und OTA-Updates. Die Firmware ist **gas-neutral**: welches Gas
 |---|---|
 | `gas-flowmeter.yaml` | **Die** Firmware. Wird direkt geflasht (alle Geräte identisch). |
 | `gas_id.h` | C++-Helfer (Anlagen-ID/Topics zur Laufzeit), wird von der YAML eingebunden. |
-| `secrets.yaml.example` | Vorlage → als `secrets.yaml` ablegen (Broker, Passwörter, API-Key). |
+| `secrets.yaml.example` | Vorlage für `secrets.yaml` (Broker, Passwörter, API-Key). Das Dashboard-Backend legt `secrets.yaml` automatisch an — von Hand nur für reine CLI-Nutzung. |
 | `diag-*.yaml` | Diagnose-Firmwares (MAC auslesen, Pin-Test). |
 
 ## Setup
@@ -32,17 +32,19 @@ Stromausfall und OTA-Updates. Die Firmware ist **gas-neutral**: welches Gas
    ```bash
    pip install esphome
    ```
-2. **Secrets anlegen:**
+2. **Secrets (`secrets.yaml`):** Läuft das Dashboard-Backend auf demselben Rechner,
+   ist **nichts zu tun** — es legt die Datei beim Start selbst an (Broker = LAN-IP,
+   OTA-Passwort und API-Key werden erzeugt, `mqtt_user`/`mqtt_password` kommen aus
+   `config.json`) und hält sie aktuell. Einsehen/ändern: Administration →
+   MQTT-Broker → **Firmware-Secrets**. Nur für reine CLI-Nutzung ohne Dashboard
+   von Hand anlegen:
    ```bash
    cp secrets.yaml.example secrets.yaml
    # mqtt_broker / Passwörter eintragen; API-Key erzeugen:
    openssl rand -base64 32
    ```
-   `mqtt_user`/`mqtt_password` pflegt danach das **Dashboard**: Änderungen in
-   ⚙ → MQTT-Broker werden automatisch in diese Datei gespiegelt, damit jeder
-   Build (und damit jeder Erstflash) die aktuellen Zugangsdaten einkompiliert
-   bekommt. Bereits laufende Geräte brauchen nach einer Passwortänderung einmal
-   Build + OTA.
+   Bereits laufende Geräte brauchen nach einer Änderung der MQTT-Zugangsdaten
+   einmal Build + OTA; das OTA-Passwort muss dabei dem einkompilierten entsprechen.
 
 ## Neues Gerät in Betrieb nehmen
 
